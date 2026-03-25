@@ -53,6 +53,10 @@ $filesToCopy = @(
         Target = (Join-Path $resolvedCatalogRepo "tools\generate-cheats-index.py")
     },
     @{
+        Source = (Join-Path $resolvedSourceRepo "tools\generate-saves-index.py")
+        Target = (Join-Path $resolvedCatalogRepo "tools\generate-saves-index.py")
+    },
+    @{
         Source = (Join-Path $resolvedSourceRepo "tools\prepare-pages-site.py")
         Target = (Join-Path $resolvedCatalogRepo "tools\prepare-pages-site.py")
     },
@@ -71,6 +75,10 @@ $filesToCopy = @(
     @{
         Source = (Join-Path $resolvedSourceRepo "catalog-source\cheats-sources.json")
         Target = (Join-Path $resolvedCatalogRepo "catalog-source\cheats-sources.json")
+    },
+    @{
+        Source = (Join-Path $resolvedSourceRepo "catalog-source\saves-sources.json")
+        Target = (Join-Path $resolvedCatalogRepo "catalog-source\saves-sources.json")
     }
 )
 
@@ -91,6 +99,11 @@ try {
     & python ".\tools\generate-cheats-index.py"
     if ($LASTEXITCODE -ne 0) {
         throw "Falha ao gerar o Ã­ndice de cheats."
+    }
+
+    & python ".\tools\generate-saves-index.py"
+    if ($LASTEXITCODE -ne 0) {
+        throw "Falha ao gerar o Ã­ndice de saves."
     }
 
     & python ".\tools\prepare-pages-site.py"

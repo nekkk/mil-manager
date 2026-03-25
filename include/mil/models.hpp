@@ -127,6 +127,37 @@ struct CheatsIndex {
     std::vector<CheatTitleRecord> titles;
 };
 
+struct SaveVariantRecord {
+    std::string id;
+    std::string label;
+    std::string category;
+    std::string saveKind;
+    std::string layoutType;
+    std::string platform;
+    std::string author;
+    std::string language;
+    std::string updatedAt;
+    std::string downloadUrl;
+    std::string sha256;
+    std::uint64_t size = 0;
+    std::vector<std::string> origins;
+};
+
+struct SaveTitleRecord {
+    std::string titleId;
+    std::string name;
+    std::vector<std::string> categories;
+    std::vector<SaveVariantRecord> variants;
+};
+
+struct SavesIndex {
+    std::string schemaVersion;
+    std::string generatedAt;
+    std::string generator;
+    std::string catalogRevision;
+    std::vector<SaveTitleRecord> titles;
+};
+
 struct InstalledTitle {
     std::uint64_t applicationId = 0;
     std::string titleIdHex;

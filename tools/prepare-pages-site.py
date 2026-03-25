@@ -9,7 +9,9 @@ ROOT = Path(__file__).resolve().parents[1]
 DIST_INDEX = ROOT / "dist" / "index.json"
 DIST_CHEATS_INDEX = ROOT / "dist" / "cheats-index.json"
 DIST_CHEATS_SUMMARY = ROOT / "dist" / "cheats-summary.json"
+DIST_SAVES_INDEX = ROOT / "dist" / "saves-index.json"
 DIST_CHEATS_DIR = ROOT / "dist" / "cheats"
+DIST_SAVE_PACKS_DIR = ROOT / "dist" / "save-packs"
 DIST_CHEATS_PACK = ROOT / "dist" / "cheats-pack.zip"
 DIST_CHEATS_MANIFEST = ROOT / "dist" / "cheats-manifest.json"
 DIST_THUMBS_DIR = ROOT / "dist" / "thumbs"
@@ -20,10 +22,12 @@ SITE_SRC_DIR = ROOT / "site-src"
 SITE_INDEX_JSON = SITE_DIR / "index.json"
 SITE_CHEATS_INDEX_JSON = SITE_DIR / "cheats-index.json"
 SITE_CHEATS_SUMMARY_JSON = SITE_DIR / "cheats-summary.json"
+SITE_SAVES_INDEX_JSON = SITE_DIR / "saves-index.json"
 SITE_INDEX_HTML = SITE_DIR / "index.html"
 SITE_NOJEKYLL = SITE_DIR / ".nojekyll"
 SITE_CNAME = SITE_DIR / "CNAME"
 SITE_CHEATS_DIR = SITE_DIR / "cheats"
+SITE_SAVE_PACKS_DIR = SITE_DIR / "save-packs"
 SITE_CHEATS_PACK = SITE_DIR / "cheats-pack.zip"
 SITE_CHEATS_MANIFEST = SITE_DIR / "cheats-manifest.json"
 SITE_THUMBS_DIR = SITE_DIR / "thumbs"
@@ -111,6 +115,7 @@ def build_html(index_data: dict) -> str:
     <div class="card">
       <p><strong>Arquivo JSON:</strong> <code>/index.json</code></p>
       <p><strong>Cheats JSON:</strong> <code>/cheats-index.json</code></p>
+      <p><strong>Saves JSON:</strong> <code>/saves-index.json</code></p>
       <p><strong>Canal:</strong> {channel}</p>
       <p><strong>Revisao:</strong> {revision}</p>
       <p><strong>Gerado em:</strong> {generated_at}</p>
@@ -151,6 +156,10 @@ def main() -> int:
         if SITE_CHEATS_DIR.exists():
             shutil.rmtree(SITE_CHEATS_DIR)
         shutil.copytree(DIST_CHEATS_DIR, SITE_CHEATS_DIR)
+    if DIST_SAVE_PACKS_DIR.exists():
+        if SITE_SAVE_PACKS_DIR.exists():
+            shutil.rmtree(SITE_SAVE_PACKS_DIR)
+        shutil.copytree(DIST_SAVE_PACKS_DIR, SITE_SAVE_PACKS_DIR)
     if DIST_CHEATS_PACK.exists():
         shutil.copyfile(DIST_CHEATS_PACK, SITE_CHEATS_PACK)
     if DIST_CHEATS_MANIFEST.exists():
@@ -164,6 +173,8 @@ def main() -> int:
         SITE_CHEATS_INDEX_JSON.write_text(DIST_CHEATS_INDEX.read_text(encoding="utf-8"), encoding="utf-8")
     if DIST_CHEATS_SUMMARY.exists():
         SITE_CHEATS_SUMMARY_JSON.write_text(DIST_CHEATS_SUMMARY.read_text(encoding="utf-8"), encoding="utf-8")
+    if DIST_SAVES_INDEX.exists():
+        SITE_SAVES_INDEX_JSON.write_text(DIST_SAVES_INDEX.read_text(encoding="utf-8"), encoding="utf-8")
     SITE_INDEX_HTML.write_text(build_html(index_data), encoding="utf-8")
     SITE_NOJEKYLL.write_text("", encoding="utf-8")
 

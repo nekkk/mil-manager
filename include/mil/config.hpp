@@ -13,8 +13,10 @@ constexpr const char* kReceiptsDir = "sdmc:/switch/mil_manager/cache/receipts";
 constexpr const char* kCacheDir = "sdmc:/switch/mil_manager/cache";
 constexpr const char* kCatalogCachePath = "sdmc:/switch/mil_manager/cache/index.json";
 constexpr const char* kCheatsIndexCachePath = "sdmc:/switch/mil_manager/cache/cheats-index.json";
+constexpr const char* kSavesIndexCachePath = "sdmc:/switch/mil_manager/cache/saves-index.json";
 constexpr const char* kSwitchLocalIndexPath = "sdmc:/switch/mil_manager/cache/index.json";
 constexpr const char* kSwitchLocalCheatsIndexPath = "sdmc:/switch/mil_manager/cache/cheats-index.json";
+constexpr const char* kSwitchLocalSavesIndexPath = "sdmc:/switch/mil_manager/cache/saves-index.json";
 constexpr const char* kInstalledTitlesCachePath = "sdmc:/switch/mil_manager/cache/installed-titles-cache.json";
 
 AppConfig LoadAppConfig(std::string& note);

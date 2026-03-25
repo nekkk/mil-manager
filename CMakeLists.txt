@@ -28,6 +28,7 @@ add_executable(${PROJECT_NAME}
     src/installer.cpp
     src/main.cpp
     src/platform_switch.cpp
+    src/savegames.cpp
 )
 
 target_include_directories(${PROJECT_NAME} PRIVATE

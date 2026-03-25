@@ -22,6 +22,7 @@
 #include "mil/http.hpp"
 #include "mil/installer.hpp"
 #include "mil/platform.hpp"
+#include "mil/savegames.hpp"
 #include "picojson.h"
 
 namespace mil {
@@ -289,13 +290,17 @@ struct AppState {
     CatalogIndex catalog;
     CheatsIndex cheatsIndex;
     std::vector<CatalogEntry> derivedCheatEntries;
+    SavesIndex savesIndex;
+    std::vector<CatalogEntry> derivedSaveEntries;
     std::vector<InstalledTitle> installedTitles;
     std::vector<InstallReceipt> receipts;
     ContentSection section = ContentSection::Translations;
     std::size_t selection = 0;
     std::string activeCatalogSource;
     std::string activeCheatsSource;
+    std::string activeSavesSource;
     bool cheatsIndexFiltered = false;
+    bool savesIndexLoaded = false;
     std::string statusLine = "Carregando...";
     std::string searchQuery;
     std::string platformNote;
@@ -428,10 +433,14 @@ bool EnsureCheatsIndexReady(AppState& state, bool forceRemoteRefresh = false, bo
 void RefreshDerivedCheatEntries(AppState& state);
 void FilterCheatsIndexToDetectedTitles(AppState& state);
 bool EntryUsesCheatsIndex(const AppState& state, const CatalogEntry& entry);
+bool EnsureSavesIndexReady(AppState& state, bool forceRemoteRefresh = false, bool allowRyujinxRemote = false);
+void RefreshDerivedSaveEntries(AppState& state);
+bool EntryUsesSavesIndex(const AppState& state, const CatalogEntry& entry);
 const char* UiText(const AppState& state, const char* ptBr, const char* enUs);
 bool UseEnglish(const AppState& state);
 const CheatTitleRecord* FindCheatTitleRecord(const CheatsIndex& index, const std::string& titleId);
 const CheatBuildRecord* FindCheatBuildRecord(const CheatTitleRecord& title, const std::string& buildId);
+const SaveTitleRecord* FindSaveTitleRecord(const SavesIndex& index, const std::string& titleId);
 bool IsRyujinxGuestEnvironment();
 std::vector<const CatalogEntry*> BuildVisibleEntries(const AppState& state);
 void RenderUi(PlatformSession& session, const AppState& state, const std::vector<const CatalogEntry*>& items);
@@ -560,6 +569,7 @@ constexpr const char* kCheatPackRootDir = "sdmc:/switch/mil_manager/cache/cheat-
 constexpr const char* kCheatPackRevisionPath = "sdmc:/switch/mil_manager/cache/cheat-pack-revision.txt";
 constexpr const char* kCheatPackZipPath = "sdmc:/switch/mil_manager/cache/cheats-pack.zip";
 constexpr const char* kCheatsIndexTempPath = "sdmc:/switch/mil_manager/cache/cheats-index.json.tmp";
+constexpr const char* kSavesIndexTempPath = "sdmc:/switch/mil_manager/cache/saves-index.json.tmp";
 
 constexpr int kDetailsX = 878;
 constexpr int kDetailsY = 28;
@@ -835,6 +845,13 @@ bool ShouldShowCheatEntryByDefault(const AppState& state, const CatalogEntry& en
     return FindInstalledTitle(state.installedTitles, entry.titleId) != nullptr;
 }
 
+bool ShouldShowSaveEntryByDefault(const AppState& state, const CatalogEntry& entry) {
+    if (entry.section != ContentSection::SaveGames) {
+        return true;
+    }
+    return FindInstalledTitle(state.installedTitles, entry.titleId) != nullptr;
+}
+
 bool OpenSearchDialog(AppState& state) {
     SwkbdConfig keyboard;
     if (R_FAILED(swkbdCreate(&keyboard, 0))) {
@@ -843,7 +860,11 @@ bool OpenSearchDialog(AppState& state) {
     }
 
     swkbdConfigMakePresetDefault(&keyboard);
-    swkbdConfigSetGuideText(&keyboard, UiText(state, "Pesquisar por nome, ID ou build", "Search by name, ID or build"));
+    const char* guideText = UiText(state, "Pesquisar por nome, ID ou build", "Search by name, ID or build");
+    if (state.section == ContentSection::SaveGames) {
+        guideText = UiText(state, u8"Pesquisar por nome ou ID do título", "Search by name or title ID");
+    }
+    swkbdConfigSetGuideText(&keyboard, guideText);
     swkbdConfigSetHeaderText(&keyboard, UiText(state, "Pesquisar", "Search"));
     swkbdConfigSetInitialText(&keyboard, state.searchQuery.c_str());
     swkbdConfigSetStringLenMax(&keyboard, 64);
@@ -863,6 +884,8 @@ bool OpenSearchDialog(AppState& state) {
             FilterCheatsIndexToDetectedTitles(state);
             RefreshDerivedCheatEntries(state);
         }
+    } else if (state.section == ContentSection::SaveGames) {
+        EnsureSavesIndexReady(state, false);
     }
     if (state.searchQuery.empty()) {
         state.statusLine = UiText(state, "Pesquisa limpa.", "Search cleared.");
@@ -946,6 +969,119 @@ void RefreshDerivedCheatEntries(AppState& state) {
     }
 }
 
+void RefreshDerivedSaveEntries(AppState& state) {
+    state.derivedSaveEntries.clear();
+
+    std::vector<std::string> seenTitleIds;
+    for (const SaveTitleRecord& saveTitle : state.savesIndex.titles) {
+        CatalogEntry entry;
+        const CatalogEntry* overrideEntry = nullptr;
+        const CatalogEntry* metadataEntry = FindAnyCatalogEntryByTitleId(state.catalog, saveTitle.titleId);
+
+        for (const CatalogEntry& candidate : state.catalog.entries) {
+            if (candidate.section == ContentSection::SaveGames &&
+                ToLowerAscii(candidate.titleId) == ToLowerAscii(saveTitle.titleId)) {
+                overrideEntry = &candidate;
+                break;
+            }
+        }
+
+        if (overrideEntry != nullptr) {
+            entry = *overrideEntry;
+        } else if (metadataEntry != nullptr) {
+            CopyCheatVisualMetadata(entry, *metadataEntry);
+        }
+
+        entry.section = ContentSection::SaveGames;
+        entry.titleId = ToLowerAscii(saveTitle.titleId);
+        entry.id = !entry.id.empty() ? entry.id : ("saves-" + ToLowerAscii(saveTitle.titleId));
+
+        if (!saveTitle.name.empty()) {
+            entry.name = saveTitle.name;
+        } else if (entry.name.empty()) {
+            entry.name = saveTitle.titleId;
+        }
+
+        if (entry.summaryPtBr.empty()) {
+            entry.summaryPtBr = u8"Backups de save agregados automaticamente a partir de repositórios públicos.";
+        }
+        if (entry.summaryEnUs.empty()) {
+            entry.summaryEnUs = "Save backups aggregated automatically from public repositories.";
+        }
+        entry.summary = entry.summaryPtBr;
+
+        if (entry.introPtBr.empty()) {
+            entry.introPtBr = u8"Backup em formato compatível com JKSV para restauração manual.";
+        }
+        if (entry.introEnUs.empty()) {
+            entry.introEnUs = "JKSV-compatible backup for manual restore.";
+        }
+        entry.intro = entry.introPtBr;
+
+        if (entry.author.empty()) {
+            std::vector<std::string> origins;
+            for (const SaveVariantRecord& variant : saveTitle.variants) {
+                if (!variant.author.empty()) {
+                    AppendUniqueString(origins, variant.author);
+                }
+                for (const std::string& origin : variant.origins) {
+                    AppendUniqueString(origins, origin);
+                }
+            }
+            if (origins.empty()) {
+                entry.author = "M.I.L.";
+            } else {
+                entry.author.clear();
+                for (std::size_t index = 0; index < origins.size(); ++index) {
+                    if (index > 0) {
+                        entry.author += ", ";
+                    }
+                    entry.author += origins[index];
+                }
+            }
+        }
+
+        if (entry.contentRevision.empty()) {
+            for (const SaveVariantRecord& variant : saveTitle.variants) {
+                if (!variant.updatedAt.empty() &&
+                    (entry.contentRevision.empty() || variant.updatedAt > entry.contentRevision)) {
+                    entry.contentRevision = variant.updatedAt;
+                }
+            }
+        }
+
+        if (entry.contentTypes.empty()) {
+            entry.contentTypes = {"save"};
+        }
+        if (!ContainsString(entry.tags, "save")) {
+            entry.tags.push_back("save");
+        }
+
+        entry.variants.clear();
+        for (const SaveVariantRecord& variantRecord : saveTitle.variants) {
+            CatalogVariant variant;
+            variant.id = variantRecord.id;
+            variant.label = variantRecord.label;
+            variant.downloadUrl = variantRecord.downloadUrl;
+            variant.contentRevision = variantRecord.updatedAt;
+            entry.variants.push_back(std::move(variant));
+        }
+
+        state.derivedSaveEntries.push_back(std::move(entry));
+        AppendUniqueString(seenTitleIds, ToLowerAscii(saveTitle.titleId));
+    }
+
+    for (const CatalogEntry& entry : state.catalog.entries) {
+        if (entry.section != ContentSection::SaveGames) {
+            continue;
+        }
+        if (ContainsString(seenTitleIds, ToLowerAscii(entry.titleId))) {
+            continue;
+        }
+        state.derivedSaveEntries.push_back(entry);
+    }
+}
+
 bool ShouldFilterCheatsIndexForCurrentView(const AppState& state) {
     return state.section == ContentSection::Cheats && NormalizeSearchQuery(state.searchQuery).empty();
 }
@@ -990,12 +1126,18 @@ bool ShouldShowProofCover(const CatalogEntry& entry) {
 
 std::vector<const CatalogEntry*> BuildVisibleEntries(const AppState& state) {
     std::vector<const CatalogEntry*> items;
-    const std::vector<CatalogEntry>* sourceEntries =
-        state.section == ContentSection::Cheats ? &state.derivedCheatEntries : &state.catalog.entries;
+    const std::vector<CatalogEntry>* sourceEntries = &state.catalog.entries;
+    if (state.section == ContentSection::Cheats) {
+        sourceEntries = &state.derivedCheatEntries;
+    } else if (state.section == ContentSection::SaveGames) {
+        sourceEntries = &state.derivedSaveEntries;
+    }
     for (const CatalogEntry& entry : *sourceEntries) {
         if (entry.section == state.section && EntryMatchesSearch(state, entry) &&
-            (state.section != ContentSection::Cheats || !NormalizeSearchQuery(state.searchQuery).empty() ||
-             ShouldShowCheatEntryByDefault(state, entry))) {
+            ((state.section != ContentSection::Cheats && state.section != ContentSection::SaveGames) ||
+             !NormalizeSearchQuery(state.searchQuery).empty() ||
+             (state.section == ContentSection::Cheats && ShouldShowCheatEntryByDefault(state, entry)) ||
+             (state.section == ContentSection::SaveGames && ShouldShowSaveEntryByDefault(state, entry)))) {
             items.push_back(&entry);
         }
     }
@@ -1629,6 +1771,24 @@ std::string DeriveCheatsPackLocation(const std::string& cheatsIndexSource) {
     return {};
 }
 
+std::string DeriveSavesIndexLocation(const std::string& catalogSource) {
+    if (catalogSource.empty()) {
+        return {};
+    }
+    if (catalogSource == kSwitchLocalIndexPath) {
+        return kSwitchLocalSavesIndexPath;
+    }
+    if (catalogSource == kCatalogCachePath) {
+        return kSavesIndexCachePath;
+    }
+    if ((catalogSource.rfind("http://", 0) == 0 || catalogSource.rfind("https://", 0) == 0) &&
+        catalogSource.size() >= 10 &&
+        catalogSource.substr(catalogSource.size() - 10) == "index.json") {
+        return catalogSource.substr(0, catalogSource.size() - 10) + "saves-index.json";
+    }
+    return {};
+}
+
 std::string DeriveThumbManifestLocation(const CatalogIndex& catalog) {
     if (!catalog.thumbPackUrl.empty()) {
         const std::string suffix = "thumbs-pack.zip";
@@ -1857,6 +2017,173 @@ bool EnsureCheatsIndexReady(AppState& state, bool forceRemoteRefresh, bool allow
     return loaded;
 }
 
+bool LoadSavesIndex(AppState& state,
+                    bool preferLocalCache = false,
+                    bool allowRemote = true,
+                    bool allowRyujinxRemote = false) {
+    EnsureDirectory("sdmc:/switch");
+    EnsureDirectory(kConfigRootDir);
+    EnsureDirectory(kCacheDir);
+
+    auto tryLoadLocalSaves = [&](const char* path) {
+        std::string localError;
+        SavesIndex localIndex;
+        if (!LoadSavesIndexFromFile(path, localIndex, localError)) {
+            return false;
+        }
+        state.savesIndex = std::move(localIndex);
+        state.activeSavesSource = path;
+        state.savesIndexLoaded = true;
+        RefreshDerivedSaveEntries(state);
+        return true;
+    };
+
+    const std::string derivedSource = DeriveSavesIndexLocation(state.activeCatalogSource);
+    if (derivedSource == kSwitchLocalSavesIndexPath && tryLoadLocalSaves(kSwitchLocalSavesIndexPath)) {
+        return true;
+    }
+    if (tryLoadLocalSaves(kSwitchLocalSavesIndexPath)) {
+        return true;
+    }
+    if (preferLocalCache && tryLoadLocalSaves(kSavesIndexCachePath)) {
+        return true;
+    }
+
+    if (FileExists(kSavesIndexTempPath)) {
+        if (tryLoadLocalSaves(kSavesIndexTempPath)) {
+            remove(kSavesIndexCachePath);
+            std::rename(kSavesIndexTempPath, kSavesIndexCachePath);
+            state.activeSavesSource = kSavesIndexCachePath;
+            return true;
+        }
+        remove(kSavesIndexTempPath);
+    }
+
+    if (allowRemote && (!IsRyujinxGuestEnvironment() || allowRyujinxRemote)) {
+        std::vector<std::string> remoteSources;
+        auto appendRemoteSource = [&](const std::string& source) {
+            if (source.empty()) {
+                return;
+            }
+            if (source.rfind("http://", 0) != 0 && source.rfind("https://", 0) != 0) {
+                return;
+            }
+            if (std::find(remoteSources.begin(), remoteSources.end(), source) == remoteSources.end()) {
+                remoteSources.push_back(source);
+            }
+        };
+
+        appendRemoteSource(derivedSource);
+        for (const std::string& catalogUrl : state.config.catalogUrls) {
+            appendRemoteSource(DeriveSavesIndexLocation(catalogUrl));
+        }
+
+        for (const std::string& remoteSource : remoteSources) {
+            std::string error;
+            HttpDownloadOptions options;
+            options.connectTimeoutMs = 6000;
+            options.requestTimeoutMs = 60000;
+            options.retryCount = 2;
+            options.probeDownloadInfo = false;
+            options.allowResume = false;
+            UiDownloadProgressContext indexProgress{
+                &state,
+                UiText(state, u8"Carregando saves", "Loading saves"),
+                u8"Baixando índice de saves...",
+                "Downloading saves index...",
+                25,
+                35};
+            options.progressCallback = UpdateUiDownloadProgress;
+            options.progressUserData = &indexProgress;
+
+            std::size_t downloadedBytes = 0;
+            if (!HttpDownloadToFileWithOptions(remoteSource, kSavesIndexTempPath, options, &downloadedBytes, error) ||
+                downloadedBytes == 0) {
+                remove(kSavesIndexTempPath);
+                continue;
+            }
+
+            SavesIndex remoteIndex;
+            std::string parseError;
+            if (!LoadSavesIndexFromFile(kSavesIndexTempPath, remoteIndex, parseError)) {
+                remove(kSavesIndexTempPath);
+                continue;
+            }
+
+            const std::string existingCache = ReadTextFile(kSavesIndexCachePath);
+            const std::string downloadedCache = ReadTextFile(kSavesIndexTempPath);
+            if (existingCache != downloadedCache) {
+                remove(kSavesIndexCachePath);
+                std::rename(kSavesIndexTempPath, kSavesIndexCachePath);
+            } else {
+                remove(kSavesIndexTempPath);
+            }
+
+            state.savesIndex = std::move(remoteIndex);
+            state.activeSavesSource = remoteSource;
+            state.savesIndexLoaded = true;
+            RefreshDerivedSaveEntries(state);
+            return true;
+        }
+    }
+
+    if (tryLoadLocalSaves(kSavesIndexCachePath)) {
+        return true;
+    }
+
+    state.savesIndex = {};
+    state.activeSavesSource.clear();
+    state.savesIndexLoaded = false;
+    RefreshDerivedSaveEntries(state);
+    return false;
+}
+
+bool EnsureSavesIndexReady(AppState& state, bool forceRemoteRefresh, bool allowRyujinxRemote) {
+    if (state.section != ContentSection::SaveGames) {
+        return false;
+    }
+
+    if (forceRemoteRefresh) {
+        SetProgress(state,
+                    UiText(state, u8"Carregando saves", "Loading saves"),
+                    UiText(state, u8"Atualizando índice e cache de saves...", "Updating saves index and cache..."),
+                    25);
+        const bool loaded = LoadSavesIndex(state, false, true, allowRyujinxRemote);
+        SetProgress(state,
+                    UiText(state, u8"Carregando saves", "Loading saves"),
+                    UiText(state, u8"Concluído.", "Done."),
+                    100);
+        ClearProgress(state);
+        return loaded;
+    }
+
+    if (state.savesIndexLoaded || !state.activeSavesSource.empty()) {
+        return true;
+    }
+
+    if (LoadSavesIndex(state, true, false, false)) {
+        return true;
+    }
+
+    if (IsRyujinxGuestEnvironment()) {
+        state.statusLine = UseEnglish(state) ? "Use Refresh to download saves index."
+                                             : u8"Use Atualizar para baixar o índice de saves.";
+        return false;
+    }
+
+    SetProgress(state,
+                UiText(state, u8"Carregando saves", "Loading saves"),
+                UiText(state, u8"Baixando índice inicial de saves...", "Downloading initial saves index..."),
+                25);
+    const bool loaded = LoadSavesIndex(state, false, true, false);
+    SetProgress(state,
+                UiText(state, u8"Carregando saves", "Loading saves"),
+                UiText(state, u8"Concluído.", "Done."),
+                100);
+    ClearProgress(state);
+    return loaded;
+}
+
 bool LoadCatalog(AppState& state,
                  bool preferLocalCache = false,
                  bool allowRemote = true,
@@ -1879,6 +2206,7 @@ bool LoadCatalog(AppState& state,
         ClearThumbnailFailures(state);
         state.activeCatalogSource = path;
         RefreshDerivedCheatEntries(state);
+        RefreshDerivedSaveEntries(state);
         state.statusLine = statusMessage;
         return true;
     };
@@ -1946,6 +2274,7 @@ bool LoadCatalog(AppState& state,
         ClearThumbnailFailures(state);
         state.activeCatalogSource = url;
         RefreshDerivedCheatEntries(state);
+        RefreshDerivedSaveEntries(state);
         return true;
     }
 
@@ -2096,6 +2425,9 @@ std::vector<std::string> EntryContentTypeLabels(const AppState& state, const Cat
             case ContentSection::Cheats:
                 appendUnique("Cheat");
                 break;
+            case ContentSection::SaveGames:
+                appendUnique(UiText(state, "Save", "Save"));
+                break;
             default:
                 break;
         }
@@ -2120,6 +2452,9 @@ const CheatBuildRecord* FindCheatBuildRecord(const CheatTitleRecord& title, cons
 bool EntryUsesCheatsIndex(const AppState& state, const CatalogEntry& entry);
 
 std::string EntryVersionStatusLabel(const AppState& state, const CatalogEntry& entry, const InstalledTitle* installedTitle) {
+    if (entry.section == ContentSection::SaveGames) {
+        return {};
+    }
     if (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry)) {
         if (installedTitle == nullptr || installedTitle->buildIdHex.empty()) {
             return UiText(state, "Build Não Detectado", "Build Unknown");
@@ -2282,10 +2617,25 @@ const CatalogEntry* FindVisibleEntryById(const AppState& state, const std::strin
             return &entry;
         }
     }
+    for (const auto& entry : state.derivedSaveEntries) {
+        if (entry.id == entryId) {
+            return &entry;
+        }
+    }
     return nullptr;
 }
 
 const CheatTitleRecord* FindCheatTitleRecord(const CheatsIndex& index, const std::string& titleId) {
+    const std::string normalizedTitleId = ToLowerAscii(titleId);
+    for (const auto& title : index.titles) {
+        if (ToLowerAscii(title.titleId) == normalizedTitleId) {
+            return &title;
+        }
+    }
+    return nullptr;
+}
+
+const SaveTitleRecord* FindSaveTitleRecord(const SavesIndex& index, const std::string& titleId) {
     const std::string normalizedTitleId = ToLowerAscii(titleId);
     for (const auto& title : index.titles) {
         if (ToLowerAscii(title.titleId) == normalizedTitleId) {
@@ -2336,6 +2686,41 @@ std::vector<std::string> CollectCheatBuildIds(const CheatTitleRecord& title) {
 bool EntryUsesCheatsIndex(const AppState& state, const CatalogEntry& entry) {
     return entry.section == ContentSection::Cheats &&
            FindCheatTitleRecord(state.cheatsIndex, entry.titleId) != nullptr;
+}
+
+bool EntryUsesSavesIndex(const AppState& state, const CatalogEntry& entry) {
+    return entry.section == ContentSection::SaveGames &&
+           FindSaveTitleRecord(state.savesIndex, entry.titleId) != nullptr;
+}
+
+std::string LocalizedSaveCategoryLabel(const AppState& state, const std::string& rawCategory) {
+    const std::string category = ToLowerAscii(rawCategory);
+    if (category == "complete") {
+        return UiText(state, "Completo", "Complete");
+    }
+    if (category == "starter") {
+        return UiText(state, "Inicial", "Starter");
+    }
+    if (category == "event") {
+        return UiText(state, "Evento", "Event");
+    }
+    if (category == "ngplus") {
+        return "NG+";
+    }
+    if (category == "unlocked") {
+        return UiText(state, "Desbloqueado", "Unlocked");
+    }
+    if (category == "modded") {
+        return UiText(state, "Modificado", "Modded");
+    }
+    return rawCategory;
+}
+
+std::string SaveVariantCountLabel(const AppState& state, std::size_t variantCount) {
+    if (variantCount == 1) {
+        return UiText(state, "1 variante", "1 variant");
+    }
+    return std::to_string(variantCount) + " " + UiText(state, "variantes", "variants");
 }
 
 std::string LocalizedCheatCategoryLabel(const AppState& state, const std::string& rawCategory) {
@@ -2488,6 +2873,27 @@ std::string CheatCardSubtitle(const AppState& state, const CatalogEntry& entry, 
     }
 
     parts.push_back(CheatBuildCountLabel(state, title->builds.size()));
+    return JoinLabels(parts, " • ");
+}
+
+std::string SaveCardSubtitle(const AppState& state, const CatalogEntry& entry) {
+    const SaveTitleRecord* title = FindSaveTitleRecord(state.savesIndex, entry.titleId);
+    if (title == nullptr) {
+        return JoinLabels(EntryContentTypeLabels(state, entry), ", ");
+    }
+
+    std::vector<std::string> parts;
+    if (!title->categories.empty()) {
+        std::vector<std::string> labels;
+        for (const std::string& category : title->categories) {
+            AppendUniqueString(labels, LocalizedSaveCategoryLabel(state, category));
+        }
+        const std::string categorySummary = SummarizeLabelList(labels, 2);
+        if (!categorySummary.empty()) {
+            parts.push_back(categorySummary);
+        }
+    }
+    parts.push_back(SaveVariantCountLabel(state, title->variants.size()));
     return JoinLabels(parts, " • ");
 }
 
@@ -3305,16 +3711,24 @@ const char* SortModeLabel(const AppState& state, SortMode mode) {
 }
 
 std::string GetCatalogSourceLabel(const AppState& state) {
-    if (state.activeCatalogSource.empty()) {
+    const std::string* activeSource = &state.activeCatalogSource;
+    if (state.section == ContentSection::Cheats && !state.activeCheatsSource.empty()) {
+        activeSource = &state.activeCheatsSource;
+    } else if (state.section == ContentSection::SaveGames && !state.activeSavesSource.empty()) {
+        activeSource = &state.activeSavesSource;
+    }
+
+    if (activeSource->empty()) {
         return UiText(state, "Nenhuma fonte ativa", "No active source");
     }
-    if (state.activeCatalogSource == kSwitchLocalIndexPath) {
+    if (*activeSource == kSwitchLocalIndexPath || *activeSource == kSwitchLocalCheatsIndexPath ||
+        *activeSource == kSwitchLocalSavesIndexPath) {
         return UiText(state, "Catálogo sincronizado do emulador", "Emulator synchronized catalog");
     }
-    if (state.activeCatalogSource == kCatalogCachePath) {
+    if (*activeSource == kCatalogCachePath || *activeSource == kCheatsIndexCachePath || *activeSource == kSavesIndexCachePath) {
         return UiText(state, "Cache local do catálogo", "Local catalog cache");
     }
-    if (state.activeCatalogSource.rfind("http://", 0) == 0 || state.activeCatalogSource.rfind("https://", 0) == 0) {
+    if (activeSource->rfind("http://", 0) == 0 || activeSource->rfind("https://", 0) == 0) {
         return UiText(state, "Catálogo online", "Online catalog");
     }
     return UiText(state, "Catálogo local", "Local catalog");
@@ -3428,6 +3842,31 @@ std::string MakeCheatAvailabilitySummaryLocalized(const AppState& state,
     }
     return std::string(UiText(state, "Nenhum cheat publicado para o build detectado: ", "No published cheat for detected build: ")) +
            installedTitle->buildIdHex;
+}
+
+std::string MakeSaveAvailabilitySummaryLocalized(const AppState& state,
+                                                 const CatalogEntry& entry,
+                                                 const InstalledTitle* installedTitle) {
+    const std::string variantsSummary = EntryHasVariants(entry) ? VariantListSummary(entry) : std::string();
+    if (!UseEnglish(state)) {
+        if (installedTitle != nullptr) {
+            return u8"Backup pronto para extração em JKSV. Restaure-o manualmente pelo JKSV no título detectado.";
+        }
+        if (!variantsSummary.empty()) {
+            return u8"Título não detectado no console/emulador. O backup será extraído em JKSV para restauração manual. Variantes disponíveis: " +
+                   variantsSummary;
+        }
+        return u8"Título não detectado no console/emulador. O backup será extraído em JKSV para restauração manual.";
+    }
+
+    if (installedTitle != nullptr) {
+        return "Backup ready to extract under JKSV. Restore it manually with JKSV for the detected title.";
+    }
+    if (!variantsSummary.empty()) {
+        return "Title not detected on the console/emulator. The backup will be extracted under JKSV for manual restore. Available variants: " +
+               variantsSummary;
+    }
+    return "Title not detected on the console/emulator. The backup will be extracted under JKSV for manual restore.";
 }
 
 std::string TruncateText(const std::string& text, std::size_t maxChars) {
@@ -3992,6 +4431,22 @@ void DrawCheatsEmptyState(gfx::Canvas& canvas, const AppState& state, int x, int
                          4);
 }
 
+void DrawSaveGamesEmptyState(gfx::Canvas& canvas, const AppState& state, int x, int y, int width, int height) {
+    const ThemePalette palette = GetThemePalette(state);
+    DrawPanel(canvas, x, y, width, height, palette.emptyFill, palette.emptyBorder);
+    gfx::DrawText(canvas, x + 22, y + 22, UiText(state, u8"Nenhum item", "No items"), palette.primaryText, 2);
+    gfx::DrawTextWrapped(canvas,
+                         x + 22,
+                         y + 62,
+                         width - 44,
+                         UiText(state,
+                                u8"Títulos não identificados. Utilize a Pesquisa para localizar o save desejado.",
+                                "Titles not identified. Use Search to find the desired save."),
+                         palette.mutedText,
+                         1,
+                         4);
+}
+
 void DrawEntryList(gfx::Canvas& canvas,
                    const AppState& state,
                    const std::vector<const CatalogEntry*>& items,
@@ -4024,6 +4479,8 @@ void DrawEntryList(gfx::Canvas& canvas,
     if (items.empty()) {
         if (state.section == ContentSection::Cheats) {
             DrawCheatsEmptyState(canvas, state, x + 18, y + 96, width - 36, height - 114);
+        } else if (state.section == ContentSection::SaveGames) {
+            DrawSaveGamesEmptyState(canvas, state, x + 18, y + 96, width - 36, height - 114);
         } else {
             DrawEmptyState(canvas, state, x + 18, y + 96, width - 36, height - 114);
         }
@@ -4080,6 +4537,8 @@ void DrawEntryList(gfx::Canvas& canvas,
         const std::string contentTypesText =
             (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry))
                 ? CheatCardSubtitle(state, entry, installedTitle)
+                : (entry.section == ContentSection::SaveGames && EntryUsesSavesIndex(state, entry))
+                      ? SaveCardSubtitle(state, entry)
                 : JoinLabels(EntryContentTypeLabels(state, entry), ", ");
         if (!contentTypesText.empty()) {
             gfx::DrawText(canvas,
@@ -4098,22 +4557,24 @@ void DrawEntryList(gfx::Canvas& canvas,
                                  installed ? palette.chipInstalledFill : palette.chipNeutralFill,
                                  installed ? palette.chipInstalledText : palette.chipNeutralText);
         const std::string versionLabel = EntryVersionStatusLabel(state, entry, installedTitle);
-        bool versionKnown = installedTitle != nullptr && !installedTitle->displayVersion.empty();
-        bool versionMatches = versionKnown && EntryMatchesInstalledVersion(entry, installedTitle);
-        if (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry)) {
-            versionKnown = installedTitle != nullptr && !installedTitle->buildIdHex.empty();
-            versionMatches = false;
-            if (versionKnown) {
-                const CheatTitleRecord* cheatTitle = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
-                versionMatches = cheatTitle != nullptr &&
-                                 FindCheatBuildRecord(*cheatTitle, installedTitle->buildIdHex) != nullptr;
+        if (!versionLabel.empty()) {
+            bool versionKnown = installedTitle != nullptr && !installedTitle->displayVersion.empty();
+            bool versionMatches = versionKnown && EntryMatchesInstalledVersion(entry, installedTitle);
+            if (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry)) {
+                versionKnown = installedTitle != nullptr && !installedTitle->buildIdHex.empty();
+                versionMatches = false;
+                if (versionKnown) {
+                    const CheatTitleRecord* cheatTitle = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
+                    versionMatches = cheatTitle != nullptr &&
+                                     FindCheatBuildRecord(*cheatTitle, installedTitle->buildIdHex) != nullptr;
+                }
             }
+            statusChips.emplace_back(versionLabel,
+                                     versionKnown ? (versionMatches ? palette.chipInstalledFill : palette.chipSuggestedFill)
+                                                  : palette.chipNeutralFill,
+                                     versionKnown ? (versionMatches ? palette.chipInstalledText : palette.chipSuggestedText)
+                                                  : palette.chipNeutralText);
         }
-        statusChips.emplace_back(versionLabel,
-                                 versionKnown ? (versionMatches ? palette.chipInstalledFill : palette.chipSuggestedFill)
-                                              : palette.chipNeutralFill,
-                                 versionKnown ? (versionMatches ? palette.chipInstalledText : palette.chipSuggestedText)
-                                              : palette.chipNeutralText);
         DrawChipRow(canvas, x + 38, cardY + 72, x + 38 + textMaxWidth, statusChips);
         cardY += kEntryCardHeight + kEntryCardGap;
     }
@@ -4297,6 +4758,36 @@ void DrawDetails(gfx::Canvas& canvas,
         cursorY += gfx::DrawTextWrapped(canvas, x + 20, cursorY, width - 40, entry.author, palette.secondaryText, 1, 6);
     }
 
+    if (entry.section == ContentSection::SaveGames && EntryUsesSavesIndex(state, entry)) {
+        const SaveTitleRecord* saveTitle = FindSaveTitleRecord(state.savesIndex, entry.titleId);
+        if (saveTitle != nullptr) {
+            if (!saveTitle->categories.empty()) {
+                std::vector<std::string> labels;
+                for (const std::string& category : saveTitle->categories) {
+                    AppendUniqueString(labels, LocalizedSaveCategoryLabel(state, category));
+                }
+                cursorY += gfx::DrawTextWrapped(canvas,
+                                                x + 20,
+                                                cursorY,
+                                                width - 40,
+                                                std::string(UiText(state, "Categorias: ", "Categories: ")) +
+                                                    SummarizeLabelList(labels, 3),
+                                                palette.secondaryText,
+                                                1,
+                                                3);
+            }
+
+            gfx::DrawText(canvas,
+                          x + 20,
+                          cursorY,
+                          std::string(UiText(state, "Variantes publicadas: ", "Published variants: ")) +
+                              std::to_string(saveTitle->variants.size()),
+                          palette.secondaryText,
+                          1);
+            cursorY += infoStep;
+        }
+    }
+
     if (installedTitle && !installedTitle->displayVersion.empty()) {
         gfx::DrawText(canvas,
                       x + 20,
@@ -4326,10 +4817,14 @@ void DrawDetails(gfx::Canvas& canvas,
         cursorY += infoStep;
     }
 
-    const std::string footerSummary =
-        (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry))
-            ? MakeCheatAvailabilitySummaryLocalized(state, entry, installedTitle)
-            : MakeCompatibilitySummaryLocalized(state, entry, installedTitle);
+    std::string footerSummary;
+    if (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry)) {
+        footerSummary = MakeCheatAvailabilitySummaryLocalized(state, entry, installedTitle);
+    } else if (entry.section == ContentSection::SaveGames && EntryUsesSavesIndex(state, entry)) {
+        footerSummary = MakeSaveAvailabilitySummaryLocalized(state, entry, installedTitle);
+    } else {
+        footerSummary = MakeCompatibilitySummaryLocalized(state, entry, installedTitle);
+    }
     cursorY += gfx::LineHeight(1) + 4;
     cursorY += gfx::DrawTextWrapped(canvas,
                                     x + 20,
@@ -4900,6 +5395,11 @@ void HandleSelectionAction(AppState& state) {
         return;
     }
 
+    if (entry.section == ContentSection::SaveGames) {
+        BeginVariantAwareInstall(state, entry, installedTitle, true);
+        return;
+    }
+
     BeginVariantAwareInstall(state, entry, installedTitle, false);
 }
 
@@ -4972,6 +5472,7 @@ void PreviewTouchTarget(AppState& state, const TouchTarget& target) {
                 state.section = sections[static_cast<std::size_t>(target.index)];
                 state.selection = 0;
                 EnsureCheatsIndexReady(state, false);
+                EnsureSavesIndexReady(state, false);
             }
             break;
         case TouchTargetKind::Entry:
@@ -5026,6 +5527,14 @@ void ActivateTouchTarget(AppState& state, const TouchTarget& target) {
                                        allowNetworkRefresh ? "Updating cheats index..." : "Using local cheats index..."),
                                 82);
                     EnsureCheatsIndexReady(state, allowNetworkRefresh, allowNetworkRefresh);
+                } else if (state.section == ContentSection::SaveGames) {
+                    SetProgress(state,
+                                UiText(state, u8"Atualizando", "Refreshing"),
+                                UiText(state,
+                                       allowNetworkRefresh ? u8"Atualizando índice de saves..." : u8"Usando índice local de saves...",
+                                       allowNetworkRefresh ? "Updating saves index..." : "Using local saves index..."),
+                                82);
+                    EnsureSavesIndexReady(state, allowNetworkRefresh, allowNetworkRefresh);
                 }
                 state.statusLine = UseEnglish(state) ? "Catalog and title scan updated."
                                                      : "Catálogo e leitura de títulos atualizados.";
@@ -5293,6 +5802,7 @@ int RunApplication() {
                 state.section = sections[currentSectionIndex];
                 state.selection = 0;
                 EnsureCheatsIndexReady(state, false);
+                EnsureSavesIndexReady(state, false);
             } else if (!visibleEntries.empty()) {
                 state.selection = std::min(state.selection + 1, visibleEntries.size() - 1);
             }
@@ -5303,6 +5813,7 @@ int RunApplication() {
                 state.section = sections[currentSectionIndex];
                 state.selection = 0;
                 EnsureCheatsIndexReady(state, false);
+                EnsureSavesIndexReady(state, false);
             } else if (state.selection > 0) {
                 state.selection -= 1;
             }
@@ -5343,6 +5854,14 @@ int RunApplication() {
                                        allowNetworkRefresh ? "Updating cheats index..." : "Using local cheats index..."),
                                 82);
                     EnsureCheatsIndexReady(state, allowNetworkRefresh, allowNetworkRefresh);
+                } else if (state.section == ContentSection::SaveGames) {
+                    SetProgress(state,
+                                UiText(state, u8"Atualizando", "Refreshing"),
+                                UiText(state,
+                                       allowNetworkRefresh ? u8"Atualizando índice de saves..." : u8"Usando índice local de saves...",
+                                       allowNetworkRefresh ? "Updating saves index..." : "Using local saves index..."),
+                                82);
+                    EnsureSavesIndexReady(state, allowNetworkRefresh, allowNetworkRefresh);
                 }
                 state.statusLine = UseEnglish(state) ? "Catalog and title scan updated."
                                                      : "Catálogo e leitura de títulos atualizados.";
