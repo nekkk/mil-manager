@@ -368,7 +368,12 @@ bool FindReceiptForPackage(const std::vector<InstallReceipt>& receipts, const st
     return false;
 }
 
-bool InstallPackage(const CatalogEntry& entry, const InstalledTitle* installedTitle, InstallReceipt& receipt, std::string& error) {
+bool InstallPackage(const CatalogEntry& entry,
+                    const InstalledTitle* installedTitle,
+                    InstallReceipt& receipt,
+                    std::string& error,
+                    HttpProgressCallback progressCallback,
+                    void* progressUserData) {
     EnsureDirectory("sdmc:/switch");
     EnsureDirectory(kConfigRootDir);
     EnsureDirectory(kCacheDir);
@@ -398,7 +403,10 @@ bool InstallPackage(const CatalogEntry& entry, const InstalledTitle* installedTi
     }
 
     std::size_t bytesDownloaded = 0;
-    if (!HttpDownloadToFile(entry.downloadUrl, zipPath, &bytesDownloaded, error)) {
+    HttpDownloadOptions downloadOptions;
+    downloadOptions.progressCallback = progressCallback;
+    downloadOptions.progressUserData = progressUserData;
+    if (!HttpDownloadToFileWithOptions(entry.downloadUrl, zipPath, downloadOptions, &bytesDownloaded, error)) {
         return false;
     }
     if (bytesDownloaded == 0) {
@@ -441,7 +449,9 @@ bool InstallCheatText(const CatalogEntry& entry,
                       const std::string& downloadUrl,
                       const InstalledTitle* installedTitle,
                       InstallReceipt& receipt,
-                      std::string& error) {
+                      std::string& error,
+                      HttpProgressCallback progressCallback,
+                      void* progressUserData) {
     EnsureDirectory("sdmc:/switch");
     EnsureDirectory(kConfigRootDir);
     EnsureDirectory(kCacheDir);
@@ -466,6 +476,8 @@ bool InstallCheatText(const CatalogEntry& entry,
     options.probeDownloadInfo = false;
     options.allowResume = false;
     options.requestTimeoutMs = 60000;
+    options.progressCallback = progressCallback;
+    options.progressUserData = progressUserData;
     if (!HttpDownloadToFileWithOptions(downloadUrl, tempPath, options, &bytesDownloaded, error)) {
         return false;
     }

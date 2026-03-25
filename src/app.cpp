@@ -1,9 +1,11 @@
 #include "mil/app.hpp"
 
 #include <algorithm>
+#include <chrono>
 #include <cstdio>
 #include <fstream>
 #include <mutex>
+#include <sstream>
 #include <sys/stat.h>
 #include <string>
 #include <thread>
@@ -454,6 +456,79 @@ void ClearProgress(AppState& state) {
     state.progressTitle.clear();
     state.progressDetail.clear();
     state.progressPercent = 0;
+}
+
+struct UiDownloadProgressContext {
+    AppState* state = nullptr;
+    std::string title;
+    std::string labelPt;
+    std::string labelEn;
+    int basePercent = 0;
+    int spanPercent = 100;
+    int lastPercent = -1;
+    std::uint64_t lastBytes = 0;
+    std::chrono::steady_clock::time_point lastUpdate = std::chrono::steady_clock::now();
+};
+
+std::string FormatByteCount(std::uint64_t bytes) {
+    static constexpr const char* kUnits[] = {"B", "KiB", "MiB", "GiB"};
+    double value = static_cast<double>(bytes);
+    std::size_t unitIndex = 0;
+    while (value >= 1024.0 && unitIndex + 1 < (sizeof(kUnits) / sizeof(kUnits[0]))) {
+        value /= 1024.0;
+        ++unitIndex;
+    }
+
+    std::ostringstream stream;
+    if (unitIndex == 0 || value >= 10.0) {
+        stream << static_cast<int>(value + 0.5);
+    } else {
+        stream.setf(std::ios::fixed);
+        stream.precision(1);
+        stream << value;
+    }
+    stream << ' ' << kUnits[unitIndex];
+    return stream.str();
+}
+
+void UpdateUiDownloadProgress(std::uint64_t downloadedBytes, std::uint64_t totalBytes, bool totalKnown, void* userData) {
+    auto* context = reinterpret_cast<UiDownloadProgressContext*>(userData);
+    if (context == nullptr || context->state == nullptr) {
+        return;
+    }
+
+    AppState& state = *context->state;
+    int percent = context->basePercent;
+    if (totalKnown && totalBytes > 0) {
+        const std::uint64_t clampedDownloaded = std::min(downloadedBytes, totalBytes);
+        percent += static_cast<int>((clampedDownloaded * static_cast<std::uint64_t>(context->spanPercent)) / totalBytes);
+    }
+    percent = std::max(0, std::min(100, percent));
+
+    const auto now = std::chrono::steady_clock::now();
+    const bool finished = totalKnown && totalBytes > 0 && downloadedBytes >= totalBytes;
+    const bool shouldRender = context->lastPercent < 0 ||
+                              percent != context->lastPercent ||
+                              downloadedBytes != context->lastBytes ||
+                              finished ||
+                              (now - context->lastUpdate) >= std::chrono::milliseconds(150);
+    if (!shouldRender) {
+        return;
+    }
+
+    context->lastPercent = percent;
+    context->lastBytes = downloadedBytes;
+    context->lastUpdate = now;
+
+    std::string detail = UseEnglish(state) ? context->labelEn : context->labelPt;
+    detail += ' ';
+    detail += FormatByteCount(downloadedBytes);
+    if (totalKnown && totalBytes > 0) {
+        detail += " / ";
+        detail += FormatByteCount(totalBytes);
+    }
+
+    SetProgress(state, context->title, detail, percent);
 }
 
 constexpr int kSidebarX = 24;
@@ -995,7 +1070,10 @@ std::string ThumbPackPathForEntry(const CatalogIndex& catalog, const CatalogEntr
     return directory + "/" + entry.id + ".png";
 }
 
-bool EnsureThumbPackCache(const CatalogIndex& catalog, std::string& error, bool allowRemoteDownload = false) {
+bool EnsureThumbPackCache(const CatalogIndex& catalog,
+                          std::string& error,
+                          bool allowRemoteDownload = false,
+                          UiDownloadProgressContext* progressContext = nullptr) {
     if (catalog.thumbPackRevision.empty() || catalog.thumbPackUrl.empty()) {
         return true;
     }
@@ -1082,7 +1160,10 @@ std::string CheatPackPathForEntry(const CheatsIndex& index, const CheatEntryReco
     return directory + "/" + entry.relativePath;
 }
 
-bool EnsureCheatPackCache(const CheatsIndex& index, std::string& error, bool allowRemoteDownload = false) {
+bool EnsureCheatPackCache(const CheatsIndex& index,
+                          std::string& error,
+                          bool allowRemoteDownload = false,
+                          UiDownloadProgressContext* progressContext = nullptr) {
     if (index.cheatsPackRevision.empty() || index.cheatsPackUrl.empty()) {
         return true;
     }
@@ -1113,6 +1194,10 @@ bool EnsureCheatPackCache(const CheatsIndex& index, std::string& error, bool all
     options.retryCount = 2;
     options.probeDownloadInfo = false;
     options.allowResume = false;
+    options.progressCallback = progressContext != nullptr ? UpdateUiDownloadProgress : nullptr;
+    options.progressUserData = progressContext;
+    options.progressCallback = progressContext != nullptr ? UpdateUiDownloadProgress : nullptr;
+    options.progressUserData = progressContext;
 
     std::size_t downloadedBytes = 0;
     if (!HttpDownloadToFileWithOptions(index.cheatsPackUrl, kCheatPackZipPath, options, &downloadedBytes, error) ||
@@ -1651,6 +1736,15 @@ bool LoadCheatsIndex(AppState& state,
             options.retryCount = 2;
             options.probeDownloadInfo = false;
             options.allowResume = false;
+            UiDownloadProgressContext indexProgress{
+                &state,
+                UiText(state, u8"Carregando trapaças", "Loading cheats"),
+                u8"Baixando índice de trapaças...",
+                "Downloading cheats index...",
+                25,
+                35};
+            options.progressCallback = UpdateUiDownloadProgress;
+            options.progressUserData = &indexProgress;
 
             const std::string tempPath = kCheatsIndexTempPath;
             std::size_t downloadedBytes = 0;
@@ -1669,9 +1763,17 @@ bool LoadCheatsIndex(AppState& state,
 
             ApplyCheatPackDefaults(remoteIndex, remoteSource);
             std::string packError;
+            UiDownloadProgressContext packProgress{
+                &state,
+                UiText(state, u8"Carregando trapaças", "Loading cheats"),
+                u8"Baixando pacote de trapaças...",
+                "Downloading cheats pack...",
+                60,
+                30};
             EnsureCheatPackCache(remoteIndex,
                                  packError,
-                                 allowRemotePackDownload || !IsRyujinxGuestEnvironment());
+                                 allowRemotePackDownload || !IsRyujinxGuestEnvironment(),
+                                 &packProgress);
             const std::string existingCache = ReadTextFile(kCheatsIndexCachePath);
             const std::string downloadedCache = ReadTextFile(tempPath);
             if (existingCache != downloadedCache) {
@@ -1830,7 +1932,17 @@ bool LoadCatalog(AppState& state,
 
         state.catalog = std::move(remoteCatalog);
         std::string thumbError;
-        EnsureThumbPackCache(state.catalog, thumbError, allowRemotePackDownload || !IsRyujinxGuestEnvironment());
+        UiDownloadProgressContext thumbProgress{
+            &state,
+            UiText(state, u8"Atualizando", "Refreshing"),
+            u8"Baixando pacote de thumbs...",
+            "Downloading thumb pack...",
+            55,
+            25};
+        EnsureThumbPackCache(state.catalog,
+                             thumbError,
+                             allowRemotePackDownload || !IsRyujinxGuestEnvironment(),
+                             &thumbProgress);
         ClearThumbnailFailures(state);
         state.activeCatalogSource = url;
         RefreshDerivedCheatEntries(state);
@@ -2640,9 +2752,20 @@ bool InstallResolvedEntry(AppState& state, const CatalogEntry& entry, const Cata
                 entry.name,
                 15);
     InstallReceipt newReceipt;
+    UiDownloadProgressContext downloadProgress{
+        &state,
+        UiText(state, u8"Instalando pacote", "Installing package"),
+        u8"Baixando pacote...",
+        "Downloading package...",
+        15,
+        65};
 
     std::string error;
-    if (InstallPackage(resolvedEntry, installedTitle, newReceipt, error)) {
+    if (InstallPackage(resolvedEntry, installedTitle, newReceipt, error, UpdateUiDownloadProgress, &downloadProgress)) {
+        SetProgress(state,
+                    UiText(state, u8"Instalando pacote", "Installing package"),
+                    UiText(state, u8"Extraindo pacote...", "Extracting package..."),
+                    90);
         SetProgress(state,
                     UiText(state, u8"Instalando pacote", "Installing package"),
                     entry.name,
@@ -2680,6 +2803,13 @@ bool InstallCheatBuild(AppState& state, const CatalogEntry& entry, const CheatBu
                 build.buildId,
                 20);
     InstallReceipt newReceipt;
+    UiDownloadProgressContext downloadProgress{
+        &state,
+        UiText(state, u8"Instalando trapaça", "Installing cheat"),
+        u8"Baixando trapaça...",
+        "Downloading cheat...",
+        20,
+        70};
 
     std::string error;
     bool installed = false;
@@ -2697,7 +2827,14 @@ bool InstallCheatBuild(AppState& state, const CatalogEntry& entry, const CheatBu
     }
 
     if (!installed && !cheatEntry->downloadUrl.empty() && !IsRyujinxGuestEnvironment()) {
-        installed = InstallCheatText(entry, build.buildId, cheatEntry->downloadUrl, installedTitle, newReceipt, error);
+        installed = InstallCheatText(entry,
+                                     build.buildId,
+                                     cheatEntry->downloadUrl,
+                                     installedTitle,
+                                     newReceipt,
+                                     error,
+                                     UpdateUiDownloadProgress,
+                                     &downloadProgress);
     }
 
     if (!installed && IsRyujinxGuestEnvironment() && error.empty()) {

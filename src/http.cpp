@@ -72,6 +72,14 @@ struct HeaderInfo {
     bool acceptRanges = false;
 };
 
+struct TransferProgressContext {
+    HttpProgressCallback callback = nullptr;
+    void* userData = nullptr;
+    std::uint64_t initialBytes = 0;
+    std::uint64_t expectedTotalBytes = 0;
+    bool expectedTotalKnown = false;
+};
+
 void ConfigureCurlCommon(CURL* curl, long connectTimeoutMs = kConnectTimeoutMs, long requestTimeoutMs = kRequestTimeoutMs) {
     curl_easy_setopt(curl, CURLOPT_USERAGENT, kUserAgent);
     curl_easy_setopt(curl, CURLOPT_FOLLOWLOCATION, 1L);
@@ -193,6 +201,32 @@ size_t DiscardWriteCallback(void* contents, size_t size, size_t nmemb, void* use
     (void)contents;
     (void)userp;
     return size * nmemb;
+}
+
+int TransferProgressCallback(void* clientp, curl_off_t dltotal, curl_off_t dlnow, curl_off_t ultotal, curl_off_t ulnow) {
+    (void)ultotal;
+    (void)ulnow;
+
+    auto* context = reinterpret_cast<TransferProgressContext*>(clientp);
+    if (context == nullptr || context->callback == nullptr) {
+        return 0;
+    }
+
+    const std::uint64_t downloadedNow = dlnow > 0 ? static_cast<std::uint64_t>(dlnow) : 0;
+    const std::uint64_t downloadedBytes = context->initialBytes + downloadedNow;
+
+    bool totalKnown = false;
+    std::uint64_t totalBytes = 0;
+    if (dltotal > 0) {
+        totalKnown = true;
+        totalBytes = context->initialBytes + static_cast<std::uint64_t>(dltotal);
+    } else if (context->expectedTotalKnown) {
+        totalKnown = true;
+        totalBytes = context->expectedTotalBytes;
+    }
+
+    context->callback(downloadedBytes, totalBytes, totalKnown, context->userData);
+    return 0;
 }
 
 size_t HeaderCallback(char* buffer, size_t size, size_t nmemb, void* userp) {
@@ -950,11 +984,27 @@ bool HttpDownloadToFileWithOptions(const std::string& url,
             return false;
         }
 
+        TransferProgressContext progressContext;
+        progressContext.callback = options.progressCallback;
+        progressContext.userData = options.progressUserData;
+        progressContext.initialBytes = useResume ? partialSize : 0;
+        progressContext.expectedTotalKnown = hasDownloadInfo && downloadInfo.sizeKnown;
+        progressContext.expectedTotalBytes = downloadInfo.contentLength;
+
         curl_easy_setopt(curl, CURLOPT_URL, effectiveUrl.c_str());
         curl_easy_setopt(curl, CURLOPT_WRITEDATA, &sink);
         curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteFileCallback);
         if (useResume) {
             curl_easy_setopt(curl, CURLOPT_RESUME_FROM_LARGE, static_cast<curl_off_t>(partialSize));
+        }
+        if (options.progressCallback != nullptr) {
+            options.progressCallback(progressContext.initialBytes,
+                                     progressContext.expectedTotalBytes,
+                                     progressContext.expectedTotalKnown,
+                                     options.progressUserData);
+            curl_easy_setopt(curl, CURLOPT_NOPROGRESS, 0L);
+            curl_easy_setopt(curl, CURLOPT_XFERINFOFUNCTION, TransferProgressCallback);
+            curl_easy_setopt(curl, CURLOPT_XFERINFODATA, &progressContext);
         }
         ConfigureCurlCommon(curl, options.connectTimeoutMs, options.requestTimeoutMs);
 
@@ -984,6 +1034,16 @@ bool HttpDownloadToFileWithOptions(const std::string& url,
 
             if (downloadedBytes != nullptr) {
                 *downloadedBytes = static_cast<std::size_t>(finalSize == 0 ? sink.bytesWritten : finalSize);
+            }
+            if (options.progressCallback != nullptr) {
+                const std::uint64_t completedBytes = finalSize == 0
+                                                         ? static_cast<std::uint64_t>(sink.bytesWritten)
+                                                         : finalSize;
+                const bool totalKnown = progressContext.expectedTotalKnown || completedBytes > 0;
+                const std::uint64_t totalBytes = progressContext.expectedTotalKnown
+                                                     ? progressContext.expectedTotalBytes
+                                                     : completedBytes;
+                options.progressCallback(completedBytes, totalBytes, totalKnown, options.progressUserData);
             }
             return true;
         }

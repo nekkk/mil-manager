@@ -7,6 +7,11 @@
 
 namespace mil {
 
+using HttpProgressCallback = void (*)(std::uint64_t downloadedBytes,
+                                      std::uint64_t totalBytes,
+                                      bool totalKnown,
+                                      void* userData);
+
 struct HttpResponse {
     long statusCode = 0;
     std::string body;
@@ -24,6 +29,8 @@ struct HttpDownloadOptions {
     int retryCount = 3;
     bool probeDownloadInfo = true;
     bool allowResume = true;
+    HttpProgressCallback progressCallback = nullptr;
+    void* progressUserData = nullptr;
 };
 
 bool HttpGetToString(const std::string& url, HttpResponse& response, std::string& error);
