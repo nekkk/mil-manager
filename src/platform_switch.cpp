@@ -128,6 +128,19 @@ bool IsSphairaLoader() {
     return ToLowerAscii(GetLoaderInfoString()).find("sphaira") != std::string::npos;
 }
 
+bool IsApplicationApplet() {
+    return appletGetAppletType() == AppletType_Application;
+}
+
+bool IsUnsafeForwarderLikeContext() {
+    const std::string loaderInfo = ToLowerAscii(GetLoaderInfoString());
+    const bool weakLoaderInfo = loaderInfo.empty() ||
+                                loaderInfo.find("hbl") != std::string::npos ||
+                                loaderInfo.find("hbmenu") != std::string::npos ||
+                                loaderInfo.find("nx-hbloader") != std::string::npos;
+    return !envIsNso() && IsApplicationApplet() && weakLoaderInfo;
+}
+
 bool HasImportedTitlesFile() {
     std::ifstream input(kInstalledTitlesCachePath);
     return input.good();
@@ -601,6 +614,12 @@ std::vector<InstalledTitle> LoadInstalledTitles(const AppConfig& config, const C
     const bool emulator = environment == RuntimeEnvironment::Emulator;
     const bool sphairaLoader = IsSphairaLoader();
     const bool loaderInfoEmpty = ToLowerAscii(GetLoaderInfoString()).empty();
+    const bool unsafeForwarderContext = IsUnsafeForwarderLikeContext();
+
+    if (unsafeForwarderContext && !importedTitlesAvailable) {
+        note = "Forwarder/titulo detectado com loader hbl/vazio. Leitura local por NS foi bloqueada neste contexto; use installed-titles-cache.json.";
+        return {};
+    }
 
     if (loaderInfoEmpty && !importedTitlesAvailable) {
         note = "Loader info vazio. Leitura local por NS foi bloqueada em modo seguro.";
@@ -696,6 +715,10 @@ RuntimeEnvironment GetRuntimeEnvironment() {
 
     if (HasImportedTitlesFile() || IsLikelyEmulatorLoader()) {
         return RuntimeEnvironment::Emulator;
+    }
+
+    if (IsUnsafeForwarderLikeContext()) {
+        return RuntimeEnvironment::Unknown;
     }
 
     if (loaderInfo.find("hbmenu") != std::string::npos ||

@@ -13,3 +13,5 @@ Thumbs.db
 *.user
 *.suo
 *.tmp
+__pycache__/
+*.pyc
