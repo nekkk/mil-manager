@@ -1,0 +1,5232 @@
+#include "mil/app.hpp"
+
+#include <algorithm>
+#include <cstdio>
+#include <fstream>
+#include <mutex>
+#include <sys/stat.h>
+#include <string>
+#include <thread>
+#include <tuple>
+#include <vector>
+
+#include <switch.h>
+#include <mbedtls/sha256.h>
+
+#include "mil/catalog.hpp"
+#include "mil/cheats.hpp"
+#include "mil/config.hpp"
+#include "mil/graphics.hpp"
+#include "mil/http.hpp"
+#include "mil/installer.hpp"
+#include "mil/platform.hpp"
+#include "picojson.h"
+
+namespace mil {
+
+namespace {
+
+std::size_t Utf8GlyphCountLocal(const std::string& text) {
+    std::size_t count = 0;
+    for (std::size_t index = 0; index < text.size();) {
+        const unsigned char lead = static_cast<unsigned char>(text[index]);
+        if ((lead & 0x80u) == 0) {
+            ++index;
+        } else if ((lead & 0xE0u) == 0xC0u && index + 1 < text.size()) {
+            index += 2;
+        } else if ((lead & 0xF0u) == 0xE0u && index + 2 < text.size()) {
+            index += 3;
+        } else if ((lead & 0xF8u) == 0xF0u && index + 3 < text.size()) {
+            index += 4;
+        } else {
+            ++index;
+        }
+        ++count;
+    }
+    return count;
+}
+
+std::size_t Utf8ByteOffsetForGlyphLocal(const std::string& text, std::size_t glyphIndex) {
+    std::size_t currentGlyph = 0;
+    std::size_t index = 0;
+    while (index < text.size() && currentGlyph < glyphIndex) {
+        const unsigned char lead = static_cast<unsigned char>(text[index]);
+        if ((lead & 0x80u) == 0) {
+            ++index;
+        } else if ((lead & 0xE0u) == 0xC0u && index + 1 < text.size()) {
+            index += 2;
+        } else if ((lead & 0xF0u) == 0xE0u && index + 2 < text.size()) {
+            index += 3;
+        } else if ((lead & 0xF8u) == 0xF0u && index + 3 < text.size()) {
+            index += 4;
+        } else {
+            ++index;
+        }
+        ++currentGlyph;
+    }
+    return index;
+}
+
+bool EnsureDirectory(const std::string& path) {
+    if (path.empty()) {
+        return false;
+    }
+
+    std::string current;
+    for (std::size_t index = 0; index < path.size(); ++index) {
+        current.push_back(path[index]);
+        if (path[index] == '/' || path[index] == ':') {
+            continue;
+        }
+        const bool isLast = index + 1 == path.size();
+        const bool nextIsSeparator = !isLast && path[index + 1] == '/';
+        if (!isLast && !nextIsSeparator) {
+            continue;
+        }
+        mkdir(current.c_str(), 0777);
+    }
+    return true;
+}
+
+bool FileExists(const std::string& path) {
+    struct stat info {};
+    return stat(path.c_str(), &info) == 0 && S_ISREG(info.st_mode);
+}
+
+bool DirectoryExists(const std::string& path) {
+    struct stat info {};
+    return stat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
+}
+
+std::string ReadTextFile(const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.good()) {
+        return {};
+    }
+    std::string data((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+    while (!data.empty() && (data.back() == '\n' || data.back() == '\r')) {
+        data.pop_back();
+    }
+    return data;
+}
+
+bool WriteTextFile(const std::string& path, const std::string& content) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output.good()) {
+        return false;
+    }
+    output.write(content.data(), static_cast<std::streamsize>(content.size()));
+    return output.good();
+}
+
+std::string SanitizePathComponent(std::string value) {
+    if (value.empty()) {
+        return "default";
+    }
+    for (char& ch : value) {
+        const bool allowed = (ch >= 'a' && ch <= 'z') || (ch >= 'A' && ch <= 'Z') || (ch >= '0' && ch <= '9') ||
+                             ch == '-' || ch == '_' || ch == '.';
+        if (!allowed) {
+            ch = '_';
+        }
+    }
+    return value;
+}
+
+int ColorLuma(std::uint32_t color) {
+    const int red = static_cast<int>((color >> 0) & 0xFFu);
+    const int green = static_cast<int>((color >> 8) & 0xFFu);
+    const int blue = static_cast<int>((color >> 16) & 0xFFu);
+    return (red * 299 + green * 587 + blue * 114) / 1000;
+}
+
+bool FileHasContent(const std::string& path) {
+    struct stat info {};
+    return stat(path.c_str(), &info) == 0 && S_ISREG(info.st_mode) && info.st_size > 0;
+}
+
+std::string ComputeFileSha256(const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.good()) {
+        return {};
+    }
+
+    mbedtls_sha256_context context;
+    mbedtls_sha256_init(&context);
+    mbedtls_sha256_starts_ret(&context, 0);
+
+    char buffer[8192];
+    while (input.good()) {
+        input.read(buffer, sizeof(buffer));
+        const std::streamsize readBytes = input.gcount();
+        if (readBytes > 0) {
+            mbedtls_sha256_update_ret(&context,
+                                      reinterpret_cast<const unsigned char*>(buffer),
+                                      static_cast<std::size_t>(readBytes));
+        }
+    }
+
+    unsigned char digest[32] = {};
+    mbedtls_sha256_finish_ret(&context, digest);
+    mbedtls_sha256_free(&context);
+
+    static constexpr char kHex[] = "0123456789abcdef";
+    std::string hex;
+    hex.reserve(64);
+    for (unsigned char byte : digest) {
+        hex.push_back(kHex[(byte >> 4) & 0x0F]);
+        hex.push_back(kHex[byte & 0x0F]);
+    }
+    return std::string("sha256:") + hex;
+}
+
+struct PackManifestInfo {
+    std::string revision;
+    std::string packUrl;
+    std::string packSha256;
+};
+
+std::string JsonStringField(const picojson::object& object, const char* key) {
+    const auto iterator = object.find(key);
+    if (iterator == object.end() || !iterator->second.is<std::string>()) {
+        return {};
+    }
+    return iterator->second.get<std::string>();
+}
+
+bool ParsePackManifestJson(const std::string& json, PackManifestInfo& manifest) {
+    picojson::value root;
+    const std::string parseError = picojson::parse(root, json);
+    if (!parseError.empty() || !root.is<picojson::object>()) {
+        return false;
+    }
+    const picojson::object& object = root.get<picojson::object>();
+    manifest.revision = JsonStringField(object, "revision");
+    manifest.packUrl = JsonStringField(object, "packUrl");
+    manifest.packSha256 = JsonStringField(object, "packSha256");
+    return true;
+}
+
+bool LoadPackManifestFromFile(const std::string& path, PackManifestInfo& manifest) {
+    const std::string json = ReadTextFile(path);
+    return !json.empty() && ParsePackManifestJson(json, manifest);
+}
+
+bool DesiredPackAlreadyPresent(const std::string& localManifestPath,
+                               const std::string& desiredRevision,
+                               const std::string& desiredPackSha256) {
+    PackManifestInfo localManifest;
+    if (!LoadPackManifestFromFile(localManifestPath, localManifest)) {
+        return false;
+    }
+    if (!desiredPackSha256.empty()) {
+        return localManifest.packSha256 == desiredPackSha256;
+    }
+    if (!desiredRevision.empty()) {
+        return localManifest.revision == desiredRevision;
+    }
+    return false;
+}
+
+bool IsUsableThumbnailCacheFile(const std::string& path) {
+    if (path.empty()) {
+        return false;
+    }
+    if (FileHasContent(path)) {
+        return true;
+    }
+    if (FileExists(path)) {
+        remove(path.c_str());
+    }
+    return false;
+}
+
+bool ContainsString(const std::vector<std::string>& values, const std::string& needle) {
+    return std::find(values.begin(), values.end(), needle) != values.end();
+}
+
+void AppendUniqueString(std::vector<std::string>& values, const std::string& value) {
+    if (!ContainsString(values, value)) {
+        values.push_back(value);
+    }
+}
+
+enum class TouchTargetKind {
+    None,
+    Section,
+    Entry,
+    ActionButton,
+    SearchButton,
+    SortButton,
+    RefreshButton,
+    LanguageButton,
+    ThemeButton,
+    ConfirmYesButton,
+    ConfirmNoButton,
+    VariantOption,
+    VariantConfirmButton,
+    VariantCancelButton,
+    CheatBuildOption,
+    CheatBuildConfirmButton,
+    CheatBuildCancelButton,
+};
+
+enum class SortMode {
+    Recommended,
+    Recent,
+    Name,
+};
+
+struct TouchTarget {
+    TouchTargetKind kind = TouchTargetKind::None;
+    int index = -1;
+};
+
+struct AppState {
+    AppConfig config;
+    CatalogIndex catalog;
+    CheatsIndex cheatsIndex;
+    std::vector<CatalogEntry> derivedCheatEntries;
+    std::vector<InstalledTitle> installedTitles;
+    std::vector<InstallReceipt> receipts;
+    ContentSection section = ContentSection::Translations;
+    std::size_t selection = 0;
+    std::string activeCatalogSource;
+    std::string activeCheatsSource;
+    bool cheatsIndexFiltered = false;
+    std::string statusLine = "Carregando...";
+    std::string searchQuery;
+    std::string platformNote;
+    enum class FocusPane {
+        Sections,
+        Catalog,
+    } focus = FocusPane::Sections;
+    SortMode sortMode = SortMode::Recommended;
+    bool touchActive = false;
+    int lastTouchX = 0;
+    int lastTouchY = 0;
+    bool exitRequested = false;
+    bool exitRequestInFlight = false;
+    TouchTarget activeTouchTarget;
+    struct ThumbnailFailure {
+        std::string id;
+        std::uint64_t retryFrame = 0;
+    };
+    std::vector<ThumbnailFailure> thumbnailFailures;
+    std::uint64_t frameCounter = 0;
+    std::mutex thumbnailMutex;
+    std::thread thumbnailWorker;
+    bool thumbnailWorkerEnabled = false;
+    bool thumbnailWorkerStop = false;
+    bool thumbnailWorkerBusy = false;
+    std::string pendingThumbnailId;
+    std::string pendingThumbnailUrl;
+    std::string pendingThumbnailFallbackUrl;
+    std::string pendingThumbnailPath;
+    ContentSection thumbnailSelectionSection = ContentSection::Translations;
+    std::size_t thumbnailSelectionAnchor = 0;
+    std::uint64_t thumbnailSelectionStableSince = 0;
+    std::uint64_t nextThumbnailPrefetchFrame = 0;
+    bool installConfirmVisible = false;
+    std::string installConfirmEntryId;
+    std::string installConfirmTitle;
+    std::string installConfirmMessage;
+    bool variantSelectVisible = false;
+    std::string variantSelectEntryId;
+    std::string variantSelectTitle;
+    std::string variantSelectMessage;
+    std::vector<std::string> variantSelectIds;
+    std::size_t variantSelectSelection = 0;
+    bool cheatBuildSelectVisible = false;
+    std::string cheatBuildEntryId;
+    std::string cheatBuildTitleId;
+    std::string cheatBuildTitle;
+    std::string cheatBuildMessage;
+    std::vector<std::string> cheatBuildIds;
+    std::size_t cheatBuildSelection = 0;
+    bool progressVisible = false;
+    std::string progressTitle;
+    std::string progressDetail;
+    int progressPercent = 0;
+    PlatformSession* activeSession = nullptr;
+};
+
+struct ThemePalette {
+    std::uint32_t windowTop;
+    std::uint32_t windowBottom;
+    std::uint32_t windowBase;
+    std::uint32_t sidebarFill;
+    std::uint32_t sidebarBorder;
+    std::uint32_t sidebarBorderFocused;
+    std::uint32_t sidebarHeaderFill;
+    std::uint32_t headerText;
+    std::uint32_t headerMetaText;
+    std::uint32_t sidebarItemFill;
+    std::uint32_t sidebarItemBorder;
+    std::uint32_t sidebarItemFillSelected;
+    std::uint32_t sidebarItemBorderSelected;
+    std::uint32_t sidebarItemText;
+    std::uint32_t sidebarItemTextSelected;
+    std::uint32_t actionFill;
+    std::uint32_t actionBorder;
+    std::uint32_t actionBorderActive;
+    std::uint32_t actionBadgeOuter;
+    std::uint32_t actionBadgeOuterActive;
+    std::uint32_t actionBadgeInner;
+    std::uint32_t actionBadgeText;
+    std::uint32_t actionText;
+    std::uint32_t statusFill;
+    std::uint32_t statusBorder;
+    std::uint32_t statusText;
+    std::uint32_t contentPanelFill;
+    std::uint32_t contentPanelBorder;
+    std::uint32_t contentPanelBorderFocused;
+    std::uint32_t contentHeaderFill;
+    std::uint32_t emptyFill;
+    std::uint32_t emptyBorder;
+    std::uint32_t entryFill;
+    std::uint32_t entryFillSelected;
+    std::uint32_t entryBorder;
+    std::uint32_t entryBorderSelected;
+    std::uint32_t entryAccent;
+    std::uint32_t entryAccentSelected;
+    std::uint32_t coverFill;
+    std::uint32_t coverBorder;
+    std::uint32_t detailsFill;
+    std::uint32_t detailsBorder;
+    std::uint32_t primaryText;
+    std::uint32_t secondaryText;
+    std::uint32_t mutedText;
+    std::uint32_t accentText;
+    std::uint32_t warningText;
+    std::uint32_t chipSuggestedFill;
+    std::uint32_t chipSuggestedText;
+    std::uint32_t chipInstalledFill;
+    std::uint32_t chipInstalledText;
+    std::uint32_t chipNeutralFill;
+    std::uint32_t chipNeutralText;
+    std::uint32_t buttonPrimaryFill;
+    std::uint32_t buttonPrimaryBorder;
+    std::uint32_t buttonPrimaryBorderActive;
+    std::uint32_t buttonSecondaryFill;
+    std::uint32_t buttonSecondaryBorder;
+    std::uint32_t buttonTextPrimary;
+    std::uint32_t buttonTextSecondary;
+    std::uint32_t buttonBadgeOuter;
+    std::uint32_t buttonBadgeInnerPrimary;
+    std::uint32_t buttonBadgeInnerSecondary;
+    std::uint32_t buttonBadgeTextPrimary;
+    std::uint32_t buttonBadgeTextSecondary;
+    std::uint32_t footerFill;
+    std::uint32_t footerBorder;
+    std::uint32_t footerText;
+};
+
+bool EnsureCheatsIndexReady(AppState& state, bool forceRemoteRefresh = false, bool allowRyujinxRemote = false);
+void RefreshDerivedCheatEntries(AppState& state);
+void FilterCheatsIndexToDetectedTitles(AppState& state);
+bool EntryUsesCheatsIndex(const AppState& state, const CatalogEntry& entry);
+const char* UiText(const AppState& state, const char* ptBr, const char* enUs);
+bool UseEnglish(const AppState& state);
+const CheatTitleRecord* FindCheatTitleRecord(const CheatsIndex& index, const std::string& titleId);
+const CheatBuildRecord* FindCheatBuildRecord(const CheatTitleRecord& title, const std::string& buildId);
+bool IsRyujinxGuestEnvironment();
+std::vector<const CatalogEntry*> BuildVisibleEntries(const AppState& state);
+void RenderUi(PlatformSession& session, const AppState& state, const std::vector<const CatalogEntry*>& items);
+
+void PumpUi(AppState& state) {
+    if (state.activeSession == nullptr) {
+        return;
+    }
+    RenderUi(*state.activeSession, state, BuildVisibleEntries(state));
+}
+
+void SetProgress(AppState& state, const std::string& title, const std::string& detail, int percent) {
+    state.progressVisible = true;
+    state.progressTitle = title;
+    state.progressDetail = detail;
+    state.progressPercent = std::max(0, std::min(100, percent));
+    PumpUi(state);
+}
+
+void ClearProgress(AppState& state) {
+    state.progressVisible = false;
+    state.progressTitle.clear();
+    state.progressDetail.clear();
+    state.progressPercent = 0;
+}
+
+constexpr int kSidebarX = 24;
+constexpr int kSidebarY = 28;
+constexpr int kSidebarWidth = 270;
+constexpr int kSidebarHeight = 664;
+constexpr int kSidebarSectionX = kSidebarX + 16;
+constexpr int kSidebarSectionY = kSidebarY + 126;
+constexpr int kSidebarSectionWidth = kSidebarWidth - 32;
+constexpr int kSidebarSectionHeight = 52;
+constexpr int kSidebarSectionGap = 10;
+
+constexpr int kEntryListX = 316;
+constexpr int kEntryListY = 28;
+constexpr int kEntryListWidth = 540;
+constexpr int kEntryListHeight = 610;
+constexpr int kEntryCardX = kEntryListX + 18;
+constexpr int kEntryCardY = kEntryListY + 96;
+constexpr int kEntryCardWidth = kEntryListWidth - 36;
+constexpr int kEntryCardHeight = 118;
+constexpr int kEntryCardGap = 8;
+constexpr int kEntryListTopOffset = 96;
+constexpr int kEntryListBottomPadding = 14;
+constexpr const char* kThumbnailCacheDir = "sdmc:/switch/mil_manager/cache/images/";
+constexpr const char* kThumbPackRootDir = "sdmc:/switch/mil_manager/cache/thumb-packs";
+constexpr const char* kThumbPackRevisionPath = "sdmc:/switch/mil_manager/cache/thumb-pack-revision.txt";
+constexpr const char* kThumbPackZipPath = "sdmc:/switch/mil_manager/cache/thumbs-pack.zip";
+constexpr const char* kCheatPackRootDir = "sdmc:/switch/mil_manager/cache/cheat-packs";
+constexpr const char* kCheatPackRevisionPath = "sdmc:/switch/mil_manager/cache/cheat-pack-revision.txt";
+constexpr const char* kCheatPackZipPath = "sdmc:/switch/mil_manager/cache/cheats-pack.zip";
+constexpr const char* kCheatsIndexTempPath = "sdmc:/switch/mil_manager/cache/cheats-index.json.tmp";
+
+constexpr int kDetailsX = 878;
+constexpr int kDetailsY = 28;
+constexpr int kDetailsWidth = 378;
+constexpr int kDetailsHeight = 610;
+constexpr int kDetailsActionX = kDetailsX + 20;
+constexpr int kDetailsActionY = kDetailsY + kDetailsHeight - 58;
+constexpr int kDetailsActionWidth = kDetailsWidth - 40;
+constexpr int kDetailsActionHeight = 46;
+
+constexpr int kFooterY = 648;
+constexpr int kFooterHeight = 44;
+constexpr int kSidebarInfoX = kSidebarX + 16;
+constexpr int kSidebarInfoWidth = kSidebarWidth - 32;
+constexpr int kSidebarCardGap = 10;
+constexpr int kSidebarCardWidth = (kSidebarInfoWidth - kSidebarCardGap) / 2;
+constexpr int kSidebarActionCardHeight = 34;
+constexpr int kSidebarStatusCardHeight = 24;
+constexpr int kSidebarActionRowGap = 8;
+constexpr int kSidebarStatusRowGap = 6;
+constexpr int kSidebarActionCardY = kSidebarY + kSidebarHeight - 164;
+constexpr int kSidebarStatusCardY = kSidebarActionCardY + (kSidebarActionCardHeight * 3) + (kSidebarActionRowGap * 2) + 10;
+constexpr int kInstallButtonX = kSidebarInfoX;
+constexpr int kExitButtonX = kSidebarInfoX + kSidebarCardWidth + kSidebarCardGap;
+constexpr int kRefreshButtonX = kSidebarInfoX;
+constexpr int kSortButtonX = kSidebarInfoX + kSidebarCardWidth + kSidebarCardGap;
+constexpr int kLanguageButtonX = kSidebarInfoX;
+constexpr int kThemeButtonX = kSidebarInfoX + kSidebarCardWidth + kSidebarCardGap;
+constexpr int kInstallButtonY = kSidebarActionCardY;
+constexpr int kExitButtonY = kSidebarActionCardY;
+constexpr int kRefreshButtonY = kSidebarActionCardY + kSidebarActionCardHeight + kSidebarActionRowGap;
+constexpr int kSortButtonY = kSidebarActionCardY + kSidebarActionCardHeight + kSidebarActionRowGap;
+constexpr int kLanguageButtonY = kSidebarActionCardY + (kSidebarActionCardHeight + kSidebarActionRowGap) * 2;
+constexpr int kThemeButtonY = kSidebarActionCardY + (kSidebarActionCardHeight + kSidebarActionRowGap) * 2;
+constexpr int kInstallConfirmDialogWidth = 420;
+constexpr int kInstallConfirmDialogHeight = 198;
+constexpr int kVariantSelectDialogWidth = 460;
+constexpr int kVariantSelectRowHeight = 34;
+constexpr int kVariantSelectRowGap = 8;
+constexpr int kVariantSelectButtonsHeight = 40;
+constexpr int kCheatBuildDialogWidth = 460;
+constexpr int kCheatBuildRowHeight = 34;
+constexpr int kCheatBuildRowGap = 8;
+constexpr int kCheatBuildButtonsHeight = 40;
+constexpr int kCheatBuildDialogMaxVisibleRows = 5;
+
+int InstallConfirmDialogX(int canvasWidth) {
+    return (canvasWidth - kInstallConfirmDialogWidth) / 2;
+}
+
+int InstallConfirmDialogY(int canvasHeight) {
+    return (canvasHeight - kInstallConfirmDialogHeight) / 2;
+}
+
+int InstallConfirmDialogX(const gfx::Canvas& canvas) {
+    return InstallConfirmDialogX(canvas.width);
+}
+
+int InstallConfirmDialogY(const gfx::Canvas& canvas) {
+    return InstallConfirmDialogY(canvas.height);
+}
+
+int VariantSelectDialogHeight(const AppState& state) {
+    const int rowCount = std::max(1, static_cast<int>(state.variantSelectIds.size()));
+    return 140 + rowCount * (kVariantSelectRowHeight + kVariantSelectRowGap);
+}
+
+int VariantSelectDialogX(int canvasWidth) {
+    return (canvasWidth - kVariantSelectDialogWidth) / 2;
+}
+
+int VariantSelectDialogY(int canvasHeight, const AppState& state) {
+    return (canvasHeight - VariantSelectDialogHeight(state)) / 2;
+}
+
+int VariantSelectDialogX(const gfx::Canvas& canvas) {
+    return VariantSelectDialogX(canvas.width);
+}
+
+int VariantSelectDialogY(const gfx::Canvas& canvas, const AppState& state) {
+    return VariantSelectDialogY(canvas.height, state);
+}
+
+int CheatBuildDialogMessageHeight(const AppState& state) {
+    return std::max(18, gfx::MeasureWrappedTextHeight(state.cheatBuildMessage, kCheatBuildDialogWidth - 36, 1, 3));
+}
+
+int CheatBuildDialogRowStartOffset(const AppState& state) {
+    return 62 + CheatBuildDialogMessageHeight(state) + 12;
+}
+
+int CheatBuildDialogRowsHeight(const AppState& state) {
+    const int rowCount =
+        std::max(1, std::min(kCheatBuildDialogMaxVisibleRows, static_cast<int>(state.cheatBuildIds.size())));
+    return rowCount * kCheatBuildRowHeight + std::max(0, rowCount - 1) * kCheatBuildRowGap;
+}
+
+int CheatBuildDialogHeight(const AppState& state) {
+    return CheatBuildDialogRowStartOffset(state) + CheatBuildDialogRowsHeight(state) + 14 + kCheatBuildButtonsHeight + 16;
+}
+
+int CheatBuildDialogX(int canvasWidth) {
+    return (canvasWidth - kCheatBuildDialogWidth) / 2;
+}
+
+int CheatBuildDialogY(int canvasHeight, const AppState& state) {
+    return (canvasHeight - CheatBuildDialogHeight(state)) / 2;
+}
+
+int CheatBuildDialogX(const gfx::Canvas& canvas) {
+    return CheatBuildDialogX(canvas.width);
+}
+
+int CheatBuildDialogY(const gfx::Canvas& canvas, const AppState& state) {
+    return CheatBuildDialogY(canvas.height, state);
+}
+
+std::pair<std::size_t, std::size_t> GetCheatBuildVisibleWindow(const AppState& state) {
+    if (state.cheatBuildIds.empty()) {
+        return {0, 0};
+    }
+
+    const std::size_t itemCount = state.cheatBuildIds.size();
+    const std::size_t visibleCount = std::min<std::size_t>(itemCount, kCheatBuildDialogMaxVisibleRows);
+    const std::size_t halfWindow = visibleCount / 2;
+    std::size_t windowStart = state.cheatBuildSelection > halfWindow ? state.cheatBuildSelection - halfWindow : 0;
+    if (windowStart + visibleCount > itemCount) {
+        windowStart = itemCount > visibleCount ? itemCount - visibleCount : 0;
+    }
+    return {windowStart, std::min(itemCount, windowStart + visibleCount)};
+}
+
+const InstalledTitle* FindInstalledTitle(const std::vector<InstalledTitle>& titles, const std::string& titleId) {
+    const std::string normalized = ToLowerAscii(titleId);
+    for (const InstalledTitle& title : titles) {
+        if (ToLowerAscii(title.titleIdHex) == normalized) {
+            return &title;
+        }
+    }
+    return nullptr;
+}
+
+const CatalogEntry* FindCheatCatalogOverride(const CatalogIndex& catalog, const std::string& titleId) {
+    const std::string normalized = ToLowerAscii(titleId);
+    for (const CatalogEntry& entry : catalog.entries) {
+        if (entry.section == ContentSection::Cheats && ToLowerAscii(entry.titleId) == normalized) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+const CatalogEntry* FindAnyCatalogEntryByTitleId(const CatalogIndex& catalog, const std::string& titleId) {
+    const std::string normalized = ToLowerAscii(titleId);
+    for (const CatalogEntry& entry : catalog.entries) {
+        if (ToLowerAscii(entry.titleId) == normalized) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+std::string NormalizeCheatDisplayName(std::string name) {
+    const std::pair<const char*, const char*> replacements[] = {
+        {"â„¢", "TM"},
+        {"â€¢", "•"},
+        {"â€“", "-"},
+        {"â€”", "-"},
+        {"â€˜", "'"},
+        {"â€™", "'"},
+        {"â€œ", "\""},
+        {"â€\x9d", "\""},
+        {"Ã¡", "á"},
+        {"Ã¢", "â"},
+        {"Ã£", "ã"},
+        {"Ã¤", "ä"},
+        {"Ã§", "ç"},
+        {"Ã©", "é"},
+        {"Ãª", "ê"},
+        {"Ã­", "í"},
+        {"Ã³", "ó"},
+        {"Ã´", "ô"},
+        {"Ãµ", "õ"},
+        {"Ãº", "ú"},
+        {"Ã‰", "É"},
+        {"Ã“", "Ó"},
+        {"Ãš", "Ú"},
+    };
+    for (const auto& replacement : replacements) {
+        std::size_t pos = 0;
+        while ((pos = name.find(replacement.first, pos)) != std::string::npos) {
+            name.replace(pos, std::char_traits<char>::length(replacement.first), replacement.second);
+            pos += std::char_traits<char>::length(replacement.second);
+        }
+    }
+    const std::string suffix = " - Cheats";
+    if (name.size() > suffix.size() && name.substr(name.size() - suffix.size()) == suffix) {
+        name.erase(name.size() - suffix.size());
+    }
+    return name;
+}
+
+void CopyCheatVisualMetadata(CatalogEntry& target, const CatalogEntry& source) {
+    if (target.name.empty()) {
+        target.name = source.name;
+    }
+    if (target.iconUrl.empty()) {
+        target.iconUrl = source.iconUrl;
+    }
+    if (target.coverUrl.empty()) {
+        target.coverUrl = source.coverUrl;
+    }
+    if (target.thumbnailUrl.empty()) {
+        target.thumbnailUrl = source.thumbnailUrl;
+    }
+    if (target.detailsUrl.empty()) {
+        target.detailsUrl = source.detailsUrl;
+    }
+}
+
+std::string NormalizeSearchQuery(std::string value) {
+    return ToLowerAscii(Trim(value));
+}
+
+bool EntryMatchesSearch(const AppState& state, const CatalogEntry& entry) {
+    const std::string query = NormalizeSearchQuery(state.searchQuery);
+    if (query.empty()) {
+        return true;
+    }
+
+    const std::string name = ToLowerAscii(entry.name);
+    const std::string titleId = ToLowerAscii(entry.titleId);
+    if (name.find(query) != std::string::npos || titleId.find(query) != std::string::npos) {
+        return true;
+    }
+
+    if (entry.section == ContentSection::Cheats) {
+        const CheatTitleRecord* cheatTitle = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
+        if (cheatTitle != nullptr) {
+            for (const CheatBuildRecord& build : cheatTitle->builds) {
+                if (ToLowerAscii(build.buildId).find(query) != std::string::npos) {
+                    return true;
+                }
+            }
+        }
+    }
+
+    return false;
+}
+
+bool CheatEntryHasExactBuildMatch(const AppState& state, const CatalogEntry& entry, const InstalledTitle* installedTitle) {
+    if (entry.section != ContentSection::Cheats || !EntryUsesCheatsIndex(state, entry) || installedTitle == nullptr ||
+        installedTitle->buildIdHex.empty()) {
+        return false;
+    }
+
+    const CheatTitleRecord* cheatTitle = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
+    return cheatTitle != nullptr && FindCheatBuildRecord(*cheatTitle, installedTitle->buildIdHex) != nullptr;
+}
+
+bool EntryIsSuggested(const AppState& state, const CatalogEntry& entry) {
+    const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
+    if (entry.section == ContentSection::Cheats) {
+        return CheatEntryHasExactBuildMatch(state, entry, installedTitle);
+    }
+    return installedTitle != nullptr;
+}
+
+bool ShouldShowCheatEntryByDefault(const AppState& state, const CatalogEntry& entry) {
+    if (entry.section != ContentSection::Cheats) {
+        return true;
+    }
+    return FindInstalledTitle(state.installedTitles, entry.titleId) != nullptr;
+}
+
+bool OpenSearchDialog(AppState& state) {
+    SwkbdConfig keyboard;
+    if (R_FAILED(swkbdCreate(&keyboard, 0))) {
+        state.statusLine = UiText(state, "Falha ao abrir pesquisa.", "Failed to open search.");
+        return false;
+    }
+
+    swkbdConfigMakePresetDefault(&keyboard);
+    swkbdConfigSetGuideText(&keyboard, UiText(state, "Pesquisar por nome, ID ou build", "Search by name, ID or build"));
+    swkbdConfigSetHeaderText(&keyboard, UiText(state, "Pesquisar", "Search"));
+    swkbdConfigSetInitialText(&keyboard, state.searchQuery.c_str());
+    swkbdConfigSetStringLenMax(&keyboard, 64);
+
+    char buffer[65] = {};
+    const Result rc = swkbdShow(&keyboard, buffer, sizeof(buffer));
+    swkbdClose(&keyboard);
+    if (R_FAILED(rc)) {
+        return false;
+    }
+
+    state.searchQuery = Trim(buffer);
+    state.selection = 0;
+    if (state.section == ContentSection::Cheats) {
+        EnsureCheatsIndexReady(state, false);
+        if (NormalizeSearchQuery(state.searchQuery).empty() && !state.cheatsIndexFiltered && !state.cheatsIndex.titles.empty()) {
+            FilterCheatsIndexToDetectedTitles(state);
+            RefreshDerivedCheatEntries(state);
+        }
+    }
+    if (state.searchQuery.empty()) {
+        state.statusLine = UiText(state, "Pesquisa limpa.", "Search cleared.");
+    } else {
+        state.statusLine = std::string(UiText(state, "Pesquisa: ", "Search: ")) + state.searchQuery;
+    }
+    return true;
+}
+
+void RefreshDerivedCheatEntries(AppState& state) {
+    state.derivedCheatEntries.clear();
+
+    std::vector<std::string> seenTitleIds;
+    for (const CheatTitleRecord& cheatTitle : state.cheatsIndex.titles) {
+        CatalogEntry entry;
+        const CatalogEntry* overrideEntry = FindCheatCatalogOverride(state.catalog, cheatTitle.titleId);
+        const CatalogEntry* metadataEntry = FindAnyCatalogEntryByTitleId(state.catalog, cheatTitle.titleId);
+
+        if (overrideEntry != nullptr) {
+            entry = *overrideEntry;
+        } else if (metadataEntry != nullptr) {
+            CopyCheatVisualMetadata(entry, *metadataEntry);
+        }
+
+        entry.section = ContentSection::Cheats;
+        entry.titleId = ToLowerAscii(cheatTitle.titleId);
+        entry.id = !entry.id.empty() ? entry.id : ("cheats-" + ToLowerAscii(cheatTitle.titleId));
+
+        const std::string resolvedName = NormalizeCheatDisplayName(cheatTitle.name);
+        if (!resolvedName.empty()) {
+            entry.name = resolvedName;
+        } else if (entry.name.empty()) {
+            entry.name = cheatTitle.titleId;
+        }
+
+        if (entry.summaryPtBr.empty()) {
+            entry.summaryPtBr = "Cheats agregados automaticamente a partir de fontes online.";
+        }
+        if (entry.summaryEnUs.empty()) {
+            entry.summaryEnUs = "Cheats aggregated automatically from online sources.";
+        }
+        entry.summary = entry.summaryPtBr;
+
+        if (entry.introPtBr.empty()) {
+            entry.introPtBr = "Instalação por build detectado do jogo ou escolha manual.";
+        }
+        if (entry.introEnUs.empty()) {
+            entry.introEnUs = "Installation by detected game build or manual selection.";
+        }
+        entry.intro = entry.introPtBr;
+
+        if (entry.author.empty()) {
+            entry.author = "M.I.L.";
+        }
+        if (entry.packageVersion.empty()) {
+            entry.packageVersion = state.cheatsIndex.catalogRevision;
+        }
+        if (entry.contentRevision.empty()) {
+            entry.contentRevision = !state.cheatsIndex.catalogRevision.empty() ? state.cheatsIndex.catalogRevision
+                                                                              : state.cheatsIndex.generatedAt;
+        }
+        if (entry.contentTypes.empty()) {
+            entry.contentTypes = {"cheat"};
+        }
+        if (!ContainsString(entry.tags, "cheat")) {
+            entry.tags.push_back("cheat");
+        }
+
+        state.derivedCheatEntries.push_back(entry);
+        AppendUniqueString(seenTitleIds, entry.titleId);
+    }
+
+    for (const CatalogEntry& entry : state.catalog.entries) {
+        if (entry.section != ContentSection::Cheats) {
+            continue;
+        }
+        if (ContainsString(seenTitleIds, ToLowerAscii(entry.titleId))) {
+            continue;
+        }
+        state.derivedCheatEntries.push_back(entry);
+    }
+}
+
+bool ShouldFilterCheatsIndexForCurrentView(const AppState& state) {
+    return state.section == ContentSection::Cheats && NormalizeSearchQuery(state.searchQuery).empty();
+}
+
+void FilterCheatsIndexToDetectedTitles(AppState& state) {
+    if (!ShouldFilterCheatsIndexForCurrentView(state) || state.cheatsIndex.titles.empty()) {
+        state.cheatsIndexFiltered = false;
+        return;
+    }
+
+    std::vector<CheatTitleRecord> filteredTitles;
+    filteredTitles.reserve(state.cheatsIndex.titles.size());
+    for (const CheatTitleRecord& title : state.cheatsIndex.titles) {
+        if (FindInstalledTitle(state.installedTitles, title.titleId) != nullptr) {
+            filteredTitles.push_back(title);
+        }
+    }
+
+    if (filteredTitles.size() < state.cheatsIndex.titles.size()) {
+        state.cheatsIndex.titles = std::move(filteredTitles);
+        state.cheatsIndexFiltered = true;
+    } else {
+        state.cheatsIndexFiltered = false;
+    }
+}
+
+bool EntryHasVariants(const CatalogEntry& entry);
+std::vector<const CatalogVariant*> CollectAllVariants(const CatalogEntry& entry);
+std::vector<const CatalogVariant*> FindCompatibleVariants(const CatalogEntry& entry, const InstalledTitle* installedTitle);
+bool EntryMatchesInstalledVersion(const CatalogEntry& entry, const InstalledTitle* installedTitle);
+bool EntryHasAnyCompatibilityInformation(const CatalogEntry& entry);
+std::string VariantDisplayLabel(const CatalogVariant& variant);
+std::string VariantListSummary(const CatalogEntry& entry);
+const CatalogVariant* FindVariantById(const CatalogEntry& entry, const std::string& variantId);
+CatalogEntry ResolveEntryForVariant(const CatalogEntry& entry, const CatalogVariant* variant);
+
+bool ShouldShowProofCover(const CatalogEntry& entry) {
+    const std::string normalizedTitleId = ToLowerAscii(entry.titleId);
+    const std::string normalizedId = ToLowerAscii(entry.id);
+    return normalizedTitleId == "0100b6e00a420000" || normalizedId == "dust-ptbr";
+}
+
+std::vector<const CatalogEntry*> BuildVisibleEntries(const AppState& state) {
+    std::vector<const CatalogEntry*> items;
+    const std::vector<CatalogEntry>* sourceEntries =
+        state.section == ContentSection::Cheats ? &state.derivedCheatEntries : &state.catalog.entries;
+    for (const CatalogEntry& entry : *sourceEntries) {
+        if (entry.section == state.section && EntryMatchesSearch(state, entry) &&
+            (state.section != ContentSection::Cheats || !NormalizeSearchQuery(state.searchQuery).empty() ||
+             ShouldShowCheatEntryByDefault(state, entry))) {
+            items.push_back(&entry);
+        }
+    }
+
+    std::sort(items.begin(), items.end(), [&](const CatalogEntry* left, const CatalogEntry* right) {
+        const bool leftSuggested = EntryIsSuggested(state, *left);
+        const bool rightSuggested = EntryIsSuggested(state, *right);
+        const bool leftDetected = FindInstalledTitle(state.installedTitles, left->titleId) != nullptr;
+        const bool rightDetected = FindInstalledTitle(state.installedTitles, right->titleId) != nullptr;
+
+        switch (state.sortMode) {
+            case SortMode::Name:
+                if (left->name != right->name) {
+                    return left->name < right->name;
+                }
+                break;
+            case SortMode::Recent:
+                if (left->contentRevision != right->contentRevision) {
+                    return left->contentRevision > right->contentRevision;
+                }
+                if (left->featured != right->featured) {
+                    return left->featured > right->featured;
+                }
+                if (leftSuggested != rightSuggested) {
+                    return leftSuggested > rightSuggested;
+                }
+                break;
+            case SortMode::Recommended:
+            default:
+                if (leftSuggested != rightSuggested) {
+                    return leftSuggested > rightSuggested;
+                }
+                if (leftDetected != rightDetected) {
+                    return leftDetected > rightDetected;
+                }
+                if (left->featured != right->featured) {
+                    return left->featured > right->featured;
+                }
+                break;
+        }
+
+        if (left->name != right->name) {
+            return left->name < right->name;
+        }
+        return left->id < right->id;
+    });
+    return items;
+}
+
+std::string ThumbnailCachePathForEntry(const CatalogEntry& entry) {
+    if (entry.id.empty()) {
+        return {};
+    }
+    return std::string(kThumbnailCacheDir) + entry.id + ".img";
+}
+
+std::string ThumbPackDirectoryForCatalog(const CatalogIndex& catalog) {
+    if (catalog.thumbPackRevision.empty()) {
+        return {};
+    }
+    return std::string(kThumbPackRootDir) + "/" + SanitizePathComponent(catalog.thumbPackRevision);
+}
+
+std::string ThumbPackPathForEntry(const CatalogIndex& catalog, const CatalogEntry& entry) {
+    if (entry.id.empty()) {
+        return {};
+    }
+    const std::string directory = ThumbPackDirectoryForCatalog(catalog);
+    if (directory.empty()) {
+        return {};
+    }
+    return directory + "/" + entry.id + ".png";
+}
+
+bool EnsureThumbPackCache(const CatalogIndex& catalog, std::string& error, bool allowRemoteDownload = false) {
+    if (catalog.thumbPackRevision.empty() || catalog.thumbPackUrl.empty()) {
+        return true;
+    }
+
+    EnsureDirectory(kCacheDir);
+    EnsureDirectory(kThumbPackRootDir);
+
+    const std::string revision = SanitizePathComponent(catalog.thumbPackRevision);
+    const std::string packDir = std::string(kThumbPackRootDir) + "/" + revision;
+    const std::string packManifestPath = packDir + "/manifest.json";
+    const std::string currentRevision = ReadTextFile(kThumbPackRevisionPath);
+    if (FileHasContent(packManifestPath) &&
+        (!allowRemoteDownload || DesiredPackAlreadyPresent(packManifestPath, catalog.thumbPackRevision, catalog.thumbPackSha256))) {
+        if (currentRevision != revision) {
+            WriteTextFile(kThumbPackRevisionPath, revision + "\n");
+        }
+        return true;
+    }
+
+    if (!allowRemoteDownload) {
+        error = "Thumb pack ausente no cache local.";
+        return false;
+    }
+
+    HttpDownloadOptions options;
+    options.connectTimeoutMs = 6000;
+    options.requestTimeoutMs = 30000;
+    options.retryCount = 2;
+    options.probeDownloadInfo = false;
+    options.allowResume = false;
+
+    std::size_t downloadedBytes = 0;
+    if (!HttpDownloadToFileWithOptions(catalog.thumbPackUrl, kThumbPackZipPath, options, &downloadedBytes, error) ||
+        downloadedBytes == 0) {
+        remove(kThumbPackZipPath);
+        if (error.empty()) {
+            error = "Thumb pack download failed.";
+        }
+        return false;
+    }
+
+    if (!catalog.thumbPackSha256.empty()) {
+        const std::string downloadedHash = ComputeFileSha256(kThumbPackZipPath);
+        if (downloadedHash.empty() || downloadedHash != catalog.thumbPackSha256) {
+            remove(kThumbPackZipPath);
+            error = "Thumb pack hash mismatch.";
+            return false;
+        }
+    }
+
+    std::vector<std::string> extractedFiles;
+    if (!ExtractZipToDirectory(kThumbPackZipPath, packDir, &extractedFiles, error)) {
+        remove(kThumbPackZipPath);
+        return false;
+    }
+
+    remove(kThumbPackZipPath);
+    if (!FileHasContent(packManifestPath)) {
+        error = "Thumb pack manifest missing after extraction.";
+        return false;
+    }
+    if (!WriteTextFile(kThumbPackRevisionPath, revision + "\n")) {
+        error = "Failed to store thumb pack revision.";
+        return false;
+    }
+    return true;
+}
+
+std::string CheatPackDirectoryForIndex(const CheatsIndex& index) {
+    if (index.cheatsPackRevision.empty()) {
+        return {};
+    }
+    return std::string(kCheatPackRootDir) + "/" + SanitizePathComponent(index.cheatsPackRevision);
+}
+
+std::string CheatPackPathForEntry(const CheatsIndex& index, const CheatEntryRecord& entry) {
+    if (entry.relativePath.empty()) {
+        return {};
+    }
+    const std::string directory = CheatPackDirectoryForIndex(index);
+    if (directory.empty()) {
+        return {};
+    }
+    return directory + "/" + entry.relativePath;
+}
+
+bool EnsureCheatPackCache(const CheatsIndex& index, std::string& error, bool allowRemoteDownload = false) {
+    if (index.cheatsPackRevision.empty() || index.cheatsPackUrl.empty()) {
+        return true;
+    }
+
+    EnsureDirectory(kCacheDir);
+    EnsureDirectory(kCheatPackRootDir);
+
+    const std::string revision = SanitizePathComponent(index.cheatsPackRevision);
+    const std::string packDir = std::string(kCheatPackRootDir) + "/" + revision;
+    const std::string packManifestPath = packDir + "/manifest.json";
+    const std::string currentRevision = ReadTextFile(kCheatPackRevisionPath);
+    if (FileHasContent(packManifestPath) &&
+        (!allowRemoteDownload || DesiredPackAlreadyPresent(packManifestPath, index.cheatsPackRevision, index.cheatsPackSha256))) {
+        if (currentRevision != revision) {
+            WriteTextFile(kCheatPackRevisionPath, revision + "\n");
+        }
+        return true;
+    }
+
+    if (!allowRemoteDownload) {
+        error = "Cheat pack ausente no cache local.";
+        return false;
+    }
+
+    HttpDownloadOptions options;
+    options.connectTimeoutMs = 6000;
+    options.requestTimeoutMs = 30000;
+    options.retryCount = 2;
+    options.probeDownloadInfo = false;
+    options.allowResume = false;
+
+    std::size_t downloadedBytes = 0;
+    if (!HttpDownloadToFileWithOptions(index.cheatsPackUrl, kCheatPackZipPath, options, &downloadedBytes, error) ||
+        downloadedBytes == 0) {
+        remove(kCheatPackZipPath);
+        if (error.empty()) {
+            error = "Cheat pack download failed.";
+        }
+        return false;
+    }
+
+    if (!index.cheatsPackSha256.empty()) {
+        const std::string downloadedHash = ComputeFileSha256(kCheatPackZipPath);
+        if (downloadedHash.empty() || downloadedHash != index.cheatsPackSha256) {
+            remove(kCheatPackZipPath);
+            error = "Cheat pack hash mismatch.";
+            return false;
+        }
+    }
+
+    std::vector<std::string> extractedFiles;
+    if (!ExtractZipToDirectory(kCheatPackZipPath, packDir, &extractedFiles, error)) {
+        remove(kCheatPackZipPath);
+        return false;
+    }
+
+    remove(kCheatPackZipPath);
+    if (!FileHasContent(packManifestPath)) {
+        error = "Cheat pack manifest missing after extraction.";
+        return false;
+    }
+    if (!WriteTextFile(kCheatPackRevisionPath, revision + "\n")) {
+        error = "Failed to store cheat pack revision.";
+        return false;
+    }
+    return true;
+}
+
+std::string CachedThumbnailPathForEntry(const AppState& state, const CatalogEntry& entry) {
+    const std::string packPath = ThumbPackPathForEntry(state.catalog, entry);
+    if (IsUsableThumbnailCacheFile(packPath)) {
+        return packPath;
+    }
+    const std::string path = ThumbnailCachePathForEntry(entry);
+    if (IsUsableThumbnailCacheFile(path)) {
+        return path;
+    }
+    return {};
+}
+
+std::string PreferredThumbnailPathForEntry(const AppState& state, const CatalogEntry& entry) {
+    const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
+    if (installedTitle != nullptr && !installedTitle->localIconPath.empty() && FileExists(installedTitle->localIconPath)) {
+        return installedTitle->localIconPath;
+    }
+    return CachedThumbnailPathForEntry(state, entry);
+}
+
+std::size_t GetVisibleEntryCountForPanelHeight(int panelHeight) {
+    const int availableHeight = std::max(0, panelHeight - kEntryListTopOffset - kEntryListBottomPadding);
+    const int perCard = kEntryCardHeight + kEntryCardGap;
+    if (perCard <= 0) {
+        return 1;
+    }
+    return static_cast<std::size_t>(std::max(1, (availableHeight + kEntryCardGap) / perCard));
+}
+
+std::pair<std::size_t, std::size_t> GetVisibleEntryWindow(std::size_t itemCount, std::size_t selection, int panelHeight) {
+    if (itemCount == 0) {
+        return {0, 0};
+    }
+
+    const std::size_t visibleCount = std::min(itemCount, GetVisibleEntryCountForPanelHeight(panelHeight));
+    const std::size_t halfWindow = visibleCount / 2;
+    std::size_t windowStart = selection > halfWindow ? selection - halfWindow : 0;
+    if (windowStart + visibleCount > itemCount) {
+        windowStart = itemCount > visibleCount ? itemCount - visibleCount : 0;
+    }
+    return {windowStart, std::min(itemCount, windowStart + visibleCount)};
+}
+
+bool HasThumbnailFailure(AppState& state, const std::string& entryId) {
+    const std::lock_guard<std::mutex> lock(state.thumbnailMutex);
+    for (const auto& failure : state.thumbnailFailures) {
+        if (failure.id == entryId && state.frameCounter < failure.retryFrame) {
+            return true;
+        }
+    }
+    return false;
+}
+
+void ClearThumbnailFailures(AppState& state) {
+    const std::lock_guard<std::mutex> lock(state.thumbnailMutex);
+    state.thumbnailFailures.clear();
+}
+
+void NoteThumbnailFailure(AppState& state, const std::string& entryId) {
+    const std::uint64_t retryDelay = IsEmulatorEnvironment() ? 900 : 180;
+    const std::lock_guard<std::mutex> lock(state.thumbnailMutex);
+    for (auto& failure : state.thumbnailFailures) {
+        if (failure.id == entryId) {
+            failure.retryFrame = state.frameCounter + retryDelay;
+            return;
+        }
+    }
+    state.thumbnailFailures.push_back({entryId, state.frameCounter + retryDelay});
+}
+
+void ThumbnailWorkerMain(AppState* state) {
+    HttpDownloadOptions options;
+    options.connectTimeoutMs = 5000;
+    options.requestTimeoutMs = 20000;
+    options.retryCount = 2;
+    options.probeDownloadInfo = false;
+    options.allowResume = false;
+
+    while (true) {
+        std::string entryId;
+        std::string url;
+        std::string fallbackUrl;
+        std::string cachePath;
+
+        {
+            const std::lock_guard<std::mutex> lock(state->thumbnailMutex);
+            if (state->thumbnailWorkerStop) {
+                break;
+            }
+            if (!state->pendingThumbnailUrl.empty()) {
+                entryId = std::move(state->pendingThumbnailId);
+                url = std::move(state->pendingThumbnailUrl);
+                fallbackUrl = std::move(state->pendingThumbnailFallbackUrl);
+                cachePath = std::move(state->pendingThumbnailPath);
+                state->pendingThumbnailId.clear();
+                state->pendingThumbnailUrl.clear();
+                state->pendingThumbnailFallbackUrl.clear();
+                state->pendingThumbnailPath.clear();
+                state->thumbnailWorkerBusy = true;
+            }
+        }
+
+        if (url.empty()) {
+            svcSleepThread(50'000'000);
+            continue;
+        }
+
+        EnsureDirectory(kThumbnailCacheDir);
+        std::size_t downloadedBytes = 0;
+        std::string error;
+        bool downloaded =
+            HttpDownloadToFileWithOptions(url, cachePath, options, &downloadedBytes, error) && downloadedBytes > 0;
+        if (!downloaded && !fallbackUrl.empty() && fallbackUrl != url) {
+            remove(cachePath.c_str());
+            downloadedBytes = 0;
+            error.clear();
+            downloaded =
+                HttpDownloadToFileWithOptions(fallbackUrl, cachePath, options, &downloadedBytes, error) && downloadedBytes > 0;
+        }
+        if (!downloaded) {
+            remove(cachePath.c_str());
+            NoteThumbnailFailure(*state, entryId);
+            const std::lock_guard<std::mutex> lock(state->thumbnailMutex);
+            state->thumbnailWorkerBusy = false;
+        } else {
+            const std::lock_guard<std::mutex> lock(state->thumbnailMutex);
+            state->thumbnailWorkerBusy = false;
+        }
+    }
+}
+
+void PrefetchVisibleThumbnail(AppState& state, const std::vector<const CatalogEntry*>& items) {
+    if (items.empty()) {
+        return;
+    }
+
+    if (!state.thumbnailWorkerEnabled) {
+        return;
+    }
+
+    const bool emulator = GetRuntimeEnvironment() == RuntimeEnvironment::Emulator;
+    if (emulator) {
+        return;
+    }
+    const std::size_t clampedSelection = std::min(state.selection, items.size() - 1);
+    if (state.thumbnailSelectionSection != state.section || state.thumbnailSelectionAnchor != clampedSelection) {
+        state.thumbnailSelectionSection = state.section;
+        state.thumbnailSelectionAnchor = clampedSelection;
+        state.thumbnailSelectionStableSince = state.frameCounter;
+        return;
+    }
+
+    const std::uint64_t settleFrames = emulator ? 18 : 10;
+    if (state.frameCounter < state.thumbnailSelectionStableSince + settleFrames ||
+        state.frameCounter < state.nextThumbnailPrefetchFrame) {
+        return;
+    }
+
+    {
+        const std::lock_guard<std::mutex> lock(state.thumbnailMutex);
+        if (state.thumbnailWorkerBusy || !state.pendingThumbnailUrl.empty()) {
+            return;
+        }
+    }
+
+    const auto window = GetVisibleEntryWindow(items.size(), clampedSelection, kEntryListHeight);
+    const std::size_t windowStart = window.first;
+    const std::size_t windowEnd = window.second;
+
+    std::vector<const CatalogEntry*> candidates;
+    candidates.push_back(items[clampedSelection]);
+    for (std::size_t index = windowStart; index < windowEnd; ++index) {
+        if (index == clampedSelection) {
+            continue;
+        }
+        candidates.push_back(items[index]);
+    }
+
+    for (const CatalogEntry* candidate : candidates) {
+        const CatalogEntry& entry = *candidate;
+        const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
+        if (installedTitle != nullptr && !installedTitle->localIconPath.empty() && FileExists(installedTitle->localIconPath)) {
+            continue;
+        }
+        const std::string primaryUrl =
+            !entry.thumbnailUrl.empty() ? entry.thumbnailUrl : (!entry.coverUrl.empty() ? entry.coverUrl : entry.iconUrl);
+        if (primaryUrl.empty() || HasThumbnailFailure(state, entry.id)) {
+            continue;
+        }
+
+        const std::string cachePath = ThumbnailCachePathForEntry(entry);
+        if (cachePath.empty() || IsUsableThumbnailCacheFile(cachePath)) {
+            continue;
+        }
+
+        const std::string fallbackUrl = !entry.coverUrl.empty() && entry.coverUrl != primaryUrl
+                                            ? entry.coverUrl
+                                            : (!entry.iconUrl.empty() && entry.iconUrl != primaryUrl ? entry.iconUrl
+                                                                                                      : std::string());
+
+        {
+            const std::lock_guard<std::mutex> lock(state.thumbnailMutex);
+            if (state.thumbnailWorkerBusy || !state.pendingThumbnailUrl.empty()) {
+                return;
+            }
+            state.pendingThumbnailId = entry.id;
+            state.pendingThumbnailUrl = primaryUrl;
+            state.pendingThumbnailFallbackUrl = fallbackUrl;
+            state.pendingThumbnailPath = cachePath;
+        }
+        state.nextThumbnailPrefetchFrame = state.frameCounter + (emulator ? 60 : 10);
+        return;
+    }
+}
+
+bool PointInRect(int x, int y, int rectX, int rectY, int rectWidth, int rectHeight) {
+    return x >= rectX && y >= rectY && x < rectX + rectWidth && y < rectY + rectHeight;
+}
+
+bool CanUseExitControl() {
+    return GetRuntimeEnvironment() == RuntimeEnvironment::Console;
+}
+
+bool IsHomebrewLoaderEnvironment() {
+    const std::string loaderInfo = ToLowerAscii(GetLoaderInfoSummary());
+    return loaderInfo.find("hbmenu") != std::string::npos ||
+           loaderInfo.find("hbl") != std::string::npos ||
+           loaderInfo.find("nx-hbloader") != std::string::npos;
+}
+
+TouchTarget HitTestTouchTarget(const AppState& state, const std::vector<const CatalogEntry*>& items, int touchX, int touchY) {
+    if (state.installConfirmVisible) {
+        const int dialogX = InstallConfirmDialogX(1280);
+        const int dialogY = InstallConfirmDialogY(720);
+        const int buttonWidth = (kInstallConfirmDialogWidth - 48) / 2;
+        if (PointInRect(touchX, touchY, dialogX + 18, dialogY + kInstallConfirmDialogHeight - 58, buttonWidth, 40)) {
+            return {TouchTargetKind::ConfirmYesButton, 0};
+        }
+        if (PointInRect(touchX,
+                        touchY,
+                        dialogX + kInstallConfirmDialogWidth / 2 + 6,
+                        dialogY + kInstallConfirmDialogHeight - 58,
+                        buttonWidth,
+                        40)) {
+            return {TouchTargetKind::ConfirmNoButton, 0};
+        }
+        return {};
+    }
+
+    if (state.variantSelectVisible) {
+        const int dialogX = VariantSelectDialogX(1280);
+        const int dialogY = VariantSelectDialogY(720, state);
+        const int dialogHeight = VariantSelectDialogHeight(state);
+        const int buttonWidth = (kVariantSelectDialogWidth - 48) / 2;
+        const int buttonY = dialogY + dialogHeight - 56;
+        const int rowStartY = dialogY + 86;
+        for (std::size_t index = 0; index < state.variantSelectIds.size(); ++index) {
+            const int rowY = rowStartY + static_cast<int>(index) * (kVariantSelectRowHeight + kVariantSelectRowGap);
+            if (PointInRect(touchX, touchY, dialogX + 18, rowY, kVariantSelectDialogWidth - 36, kVariantSelectRowHeight)) {
+                return {TouchTargetKind::VariantOption, static_cast<int>(index)};
+            }
+        }
+        if (PointInRect(touchX, touchY, dialogX + 18, buttonY, buttonWidth, kVariantSelectButtonsHeight)) {
+            return {TouchTargetKind::VariantConfirmButton, 0};
+        }
+        if (PointInRect(touchX,
+                        touchY,
+                        dialogX + kVariantSelectDialogWidth / 2 + 6,
+                        buttonY,
+                        buttonWidth,
+                        kVariantSelectButtonsHeight)) {
+            return {TouchTargetKind::VariantCancelButton, 0};
+        }
+        return {};
+    }
+
+    if (state.cheatBuildSelectVisible) {
+        const int dialogX = CheatBuildDialogX(1280);
+        const int dialogY = CheatBuildDialogY(720, state);
+        const int dialogHeight = CheatBuildDialogHeight(state);
+        const int buttonWidth = (kCheatBuildDialogWidth - 48) / 2;
+        const int rowStartY = dialogY + CheatBuildDialogRowStartOffset(state);
+        const int buttonY = rowStartY + CheatBuildDialogRowsHeight(state) + 14;
+        const auto [windowStart, windowEnd] = GetCheatBuildVisibleWindow(state);
+        for (std::size_t index = windowStart; index < windowEnd; ++index) {
+            const int rowIndex = static_cast<int>(index - windowStart);
+            const int rowY = rowStartY + rowIndex * (kCheatBuildRowHeight + kCheatBuildRowGap);
+            if (PointInRect(touchX, touchY, dialogX + 18, rowY, kCheatBuildDialogWidth - 36, kCheatBuildRowHeight)) {
+                return {TouchTargetKind::CheatBuildOption, static_cast<int>(index)};
+            }
+        }
+        if (PointInRect(touchX, touchY, dialogX + 18, buttonY, buttonWidth, kCheatBuildButtonsHeight)) {
+            return {TouchTargetKind::CheatBuildConfirmButton, 0};
+        }
+        if (PointInRect(touchX,
+                        touchY,
+                        dialogX + kCheatBuildDialogWidth / 2 + 6,
+                        buttonY,
+                        buttonWidth,
+                        kCheatBuildButtonsHeight)) {
+            return {TouchTargetKind::CheatBuildCancelButton, 0};
+        }
+        return {};
+    }
+
+    const std::vector<ContentSection> sections = {
+        ContentSection::Translations,
+        ContentSection::ModsTools,
+        ContentSection::Cheats,
+        ContentSection::SaveGames,
+        ContentSection::About,
+    };
+
+    for (std::size_t index = 0; index < sections.size(); ++index) {
+        const int itemY = kSidebarSectionY + static_cast<int>(index) * (kSidebarSectionHeight + kSidebarSectionGap);
+        if (PointInRect(touchX, touchY, kSidebarSectionX, itemY, kSidebarSectionWidth, kSidebarSectionHeight)) {
+            return {TouchTargetKind::Section, static_cast<int>(index)};
+        }
+    }
+
+    if (PointInRect(touchX, touchY, kInstallButtonX, kInstallButtonY, kSidebarCardWidth, kSidebarActionCardHeight)) {
+        return {TouchTargetKind::ActionButton, 0};
+    }
+    if (PointInRect(touchX, touchY, kExitButtonX, kExitButtonY, kSidebarCardWidth, kSidebarActionCardHeight)) {
+        return {TouchTargetKind::SearchButton, 0};
+    }
+    if (PointInRect(touchX, touchY, kSortButtonX, kSortButtonY, kSidebarCardWidth, kSidebarActionCardHeight)) {
+        return {TouchTargetKind::SortButton, 0};
+    }
+    if (PointInRect(touchX, touchY, kLanguageButtonX, kLanguageButtonY, kSidebarCardWidth, kSidebarActionCardHeight)) {
+        return {TouchTargetKind::LanguageButton, 0};
+    }
+    if (PointInRect(touchX, touchY, kRefreshButtonX, kRefreshButtonY, kSidebarCardWidth, kSidebarActionCardHeight)) {
+        return {TouchTargetKind::RefreshButton, 0};
+    }
+    if (PointInRect(touchX, touchY, kThemeButtonX, kThemeButtonY, kSidebarCardWidth, kSidebarActionCardHeight)) {
+        return {TouchTargetKind::ThemeButton, 0};
+    }
+
+    if (!items.empty()) {
+        const std::size_t clampedSelection = std::min(state.selection, items.size() - 1);
+        const auto window = GetVisibleEntryWindow(items.size(), clampedSelection, kEntryListHeight);
+        const std::size_t windowStart = window.first;
+        const std::size_t windowEnd = window.second;
+        int cardY = kEntryCardY;
+        for (std::size_t index = windowStart; index < windowEnd; ++index) {
+            if (PointInRect(touchX, touchY, kEntryCardX, cardY, kEntryCardWidth, kEntryCardHeight)) {
+                return {TouchTargetKind::Entry, static_cast<int>(index)};
+            }
+            cardY += kEntryCardHeight + kEntryCardGap;
+        }
+    }
+
+    return {};
+}
+
+bool SameTouchTarget(const TouchTarget& left, const TouchTarget& right) {
+    return left.kind == right.kind && left.index == right.index;
+}
+
+std::string DeriveCheatsIndexLocation(const std::string& catalogSource) {
+    if (catalogSource.empty()) {
+        return {};
+    }
+    if (catalogSource == kSwitchLocalIndexPath) {
+        return kSwitchLocalCheatsIndexPath;
+    }
+    if (catalogSource == kCatalogCachePath) {
+        return kCheatsIndexCachePath;
+    }
+    if ((catalogSource.rfind("http://", 0) == 0 || catalogSource.rfind("https://", 0) == 0) &&
+        catalogSource.size() >= 10 &&
+        catalogSource.substr(catalogSource.size() - 10) == "index.json") {
+        return catalogSource.substr(0, catalogSource.size() - 10) + "cheats-index.json";
+    }
+    return {};
+}
+
+std::string DeriveCheatsPackLocation(const std::string& cheatsIndexSource) {
+    if (cheatsIndexSource.empty()) {
+        return {};
+    }
+    if (cheatsIndexSource == kSwitchLocalCheatsIndexPath || cheatsIndexSource == kCheatsIndexCachePath) {
+        return {};
+    }
+    if ((cheatsIndexSource.rfind("http://", 0) == 0 || cheatsIndexSource.rfind("https://", 0) == 0) &&
+        cheatsIndexSource.size() >= 17 &&
+        cheatsIndexSource.substr(cheatsIndexSource.size() - 17) == "cheats-index.json") {
+        return cheatsIndexSource.substr(0, cheatsIndexSource.size() - 17) + "cheats-pack.zip";
+    }
+    return {};
+}
+
+std::string DeriveThumbManifestLocation(const CatalogIndex& catalog) {
+    if (!catalog.thumbPackUrl.empty()) {
+        const std::string suffix = "thumbs-pack.zip";
+        if (catalog.thumbPackUrl.size() >= suffix.size() &&
+            catalog.thumbPackUrl.substr(catalog.thumbPackUrl.size() - suffix.size()) == suffix) {
+            return catalog.thumbPackUrl.substr(0, catalog.thumbPackUrl.size() - suffix.size()) + "thumbs-manifest.json";
+        }
+    }
+    return {};
+}
+
+std::string DeriveCheatsManifestLocation(const CheatsIndex& index) {
+    if (!index.cheatsPackUrl.empty()) {
+        const std::string suffix = "cheats-pack.zip";
+        if (index.cheatsPackUrl.size() >= suffix.size() &&
+            index.cheatsPackUrl.substr(index.cheatsPackUrl.size() - suffix.size()) == suffix) {
+            return index.cheatsPackUrl.substr(0, index.cheatsPackUrl.size() - suffix.size()) + "cheats-manifest.json";
+        }
+    }
+    return {};
+}
+
+void ApplyCheatPackDefaults(CheatsIndex& index, const std::string& cheatsIndexSource) {
+    if (index.cheatsPackRevision.empty()) {
+        index.cheatsPackRevision = !index.catalogRevision.empty() ? index.catalogRevision : index.generatedAt;
+    }
+    if (index.cheatsPackUrl.empty()) {
+        index.cheatsPackUrl = DeriveCheatsPackLocation(cheatsIndexSource);
+    }
+}
+
+bool LoadCheatsIndex(AppState& state,
+                     bool preferLocalCache = false,
+                     bool allowRemote = true,
+                     bool allowRemotePackDownload = false,
+                     bool allowRyujinxRemote = false) {
+    EnsureDirectory("sdmc:/switch");
+    EnsureDirectory(kConfigRootDir);
+    EnsureDirectory(kCacheDir);
+
+    auto tryLoadLocalCheats = [&](const char* path) {
+        std::string localError;
+        CheatsIndex localIndex;
+        if (!LoadCheatsIndexFromFile(path, localIndex, localError)) {
+            return false;
+        }
+        ApplyCheatPackDefaults(localIndex, path);
+        state.cheatsIndex = std::move(localIndex);
+        std::string packError;
+        EnsureCheatPackCache(state.cheatsIndex, packError, false);
+        state.cheatsIndexFiltered = false;
+        FilterCheatsIndexToDetectedTitles(state);
+        state.activeCheatsSource = path;
+        RefreshDerivedCheatEntries(state);
+        return true;
+    };
+
+    const std::string derivedSource = DeriveCheatsIndexLocation(state.activeCatalogSource);
+    if (derivedSource == kSwitchLocalCheatsIndexPath && tryLoadLocalCheats(kSwitchLocalCheatsIndexPath)) {
+        return true;
+    }
+
+    if (tryLoadLocalCheats(kSwitchLocalCheatsIndexPath)) {
+        return true;
+    }
+
+    if (preferLocalCache && tryLoadLocalCheats(kCheatsIndexCachePath)) {
+        return true;
+    }
+
+    if (FileExists(kCheatsIndexTempPath)) {
+        if (tryLoadLocalCheats(kCheatsIndexTempPath)) {
+            remove(kCheatsIndexCachePath);
+            std::rename(kCheatsIndexTempPath, kCheatsIndexCachePath);
+            state.activeCheatsSource = kCheatsIndexCachePath;
+            return true;
+        }
+        remove(kCheatsIndexTempPath);
+    }
+
+    if (allowRemote && (!IsRyujinxGuestEnvironment() || allowRyujinxRemote)) {
+        std::vector<std::string> remoteSources;
+        auto appendRemoteSource = [&](const std::string& source) {
+            if (source.empty()) {
+                return;
+            }
+            if (source.rfind("http://", 0) != 0 && source.rfind("https://", 0) != 0) {
+                return;
+            }
+            if (std::find(remoteSources.begin(), remoteSources.end(), source) == remoteSources.end()) {
+                remoteSources.push_back(source);
+            }
+        };
+
+        appendRemoteSource(derivedSource);
+        for (const std::string& catalogUrl : state.config.catalogUrls) {
+            appendRemoteSource(DeriveCheatsIndexLocation(catalogUrl));
+        }
+
+        for (const std::string& remoteSource : remoteSources) {
+            std::string error;
+            HttpDownloadOptions options;
+            options.connectTimeoutMs = 6000;
+            options.requestTimeoutMs = 60000;
+            options.retryCount = 2;
+            options.probeDownloadInfo = false;
+            options.allowResume = false;
+
+            const std::string tempPath = kCheatsIndexTempPath;
+            std::size_t downloadedBytes = 0;
+            if (!HttpDownloadToFileWithOptions(remoteSource, tempPath, options, &downloadedBytes, error) ||
+                downloadedBytes == 0) {
+                remove(tempPath.c_str());
+                continue;
+            }
+
+            CheatsIndex remoteIndex;
+            std::string parseError;
+            if (!LoadCheatsIndexFromFile(tempPath, remoteIndex, parseError)) {
+                remove(tempPath.c_str());
+                continue;
+            }
+
+            ApplyCheatPackDefaults(remoteIndex, remoteSource);
+            std::string packError;
+            EnsureCheatPackCache(remoteIndex,
+                                 packError,
+                                 allowRemotePackDownload || !IsRyujinxGuestEnvironment());
+            const std::string existingCache = ReadTextFile(kCheatsIndexCachePath);
+            const std::string downloadedCache = ReadTextFile(tempPath);
+            if (existingCache != downloadedCache) {
+                remove(kCheatsIndexCachePath);
+                std::rename(tempPath.c_str(), kCheatsIndexCachePath);
+            } else {
+                remove(tempPath.c_str());
+            }
+            state.cheatsIndex = std::move(remoteIndex);
+            state.cheatsIndexFiltered = false;
+            FilterCheatsIndexToDetectedTitles(state);
+            state.activeCheatsSource = remoteSource;
+            RefreshDerivedCheatEntries(state);
+            return true;
+        }
+    }
+
+    if (tryLoadLocalCheats(kCheatsIndexCachePath)) {
+        return true;
+    }
+
+    state.cheatsIndex = {};
+    state.cheatsIndexFiltered = false;
+    state.activeCheatsSource.clear();
+    RefreshDerivedCheatEntries(state);
+    return false;
+}
+
+bool EnsureCheatsIndexReady(AppState& state, bool forceRemoteRefresh, bool allowRyujinxRemote) {
+    if (state.section != ContentSection::Cheats) {
+        return false;
+    }
+
+    if (forceRemoteRefresh) {
+        SetProgress(state,
+                    UiText(state, u8"Carregando trapaças", "Loading cheats"),
+                    UiText(state, u8"Atualizando índice e cache de trapaças...", "Updating cheats index and cache..."),
+                    25);
+        const bool loaded = LoadCheatsIndex(state, false, true, true, allowRyujinxRemote);
+        SetProgress(state,
+                    UiText(state, u8"Carregando trapaças", "Loading cheats"),
+                    UiText(state, u8"Concluído.", "Done."),
+                    100);
+        ClearProgress(state);
+        return loaded;
+    }
+
+    if (!state.cheatsIndex.titles.empty() || !state.activeCheatsSource.empty()) {
+        if (!NormalizeSearchQuery(state.searchQuery).empty() && state.cheatsIndexFiltered) {
+            if (LoadCheatsIndex(state, true, false, false, false)) {
+                return true;
+            }
+            if (IsRyujinxGuestEnvironment()) {
+                return false;
+            }
+            return LoadCheatsIndex(state, false, true, false, false);
+        }
+        return true;
+    }
+
+    if (LoadCheatsIndex(state, true, false, false, false)) {
+        return true;
+    }
+
+    if (IsRyujinxGuestEnvironment()) {
+        state.statusLine = UseEnglish(state) ? "Use Refresh to download cheats index."
+                                             : u8"Use Atualizar para baixar o índice de trapaças.";
+        return false;
+    }
+
+    SetProgress(state,
+                UiText(state, u8"Carregando trapaças", "Loading cheats"),
+                UiText(state, u8"Baixando índice inicial de trapaças...", "Downloading initial cheats index..."),
+                25);
+    const bool loaded = LoadCheatsIndex(state, false, true, false, false);
+    SetProgress(state,
+                UiText(state, u8"Carregando trapaças", "Loading cheats"),
+                UiText(state, u8"Concluído.", "Done."),
+                100);
+    ClearProgress(state);
+    return loaded;
+}
+
+bool LoadCatalog(AppState& state,
+                 bool preferLocalCache = false,
+                 bool allowRemote = true,
+                 bool allowRemotePackDownload = false,
+                 bool allowRyujinxRemote = false) {
+    EnsureDirectory("sdmc:/switch");
+    EnsureDirectory(kConfigRootDir);
+    EnsureDirectory(kCacheDir);
+    const bool english = state.config.language == LanguageMode::EnUs;
+
+    auto tryLoadLocalCatalog = [&](const char* path, const char* statusMessage) {
+        std::string localError;
+        CatalogIndex localCatalog;
+        if (!LoadCatalogFromFile(path, localCatalog, localError)) {
+            return false;
+        }
+        state.catalog = std::move(localCatalog);
+        std::string thumbError;
+        EnsureThumbPackCache(state.catalog, thumbError, false);
+        ClearThumbnailFailures(state);
+        state.activeCatalogSource = path;
+        RefreshDerivedCheatEntries(state);
+        state.statusLine = statusMessage;
+        return true;
+    };
+
+    if (IsEmulatorEnvironment()) {
+        if (tryLoadLocalCatalog(kSwitchLocalIndexPath,
+                                english ? "Using local synchronized catalog." : "Usando catálogo local sincronizado.")) {
+            return true;
+        }
+    }
+
+    if (preferLocalCache) {
+        if (tryLoadLocalCatalog(kCatalogCachePath,
+                                english ? "Using cached catalog." : "Usando catálogo em cache.")) {
+            return true;
+        }
+    }
+
+    if (IsRyujinxGuestEnvironment() && !allowRyujinxRemote) {
+        state.statusLine = english ? "Use Refresh to download catalog cache." : u8"Use Atualizar para baixar o cache do catálogo.";
+        return false;
+    }
+
+    std::string error;
+    for (const std::string& url : state.config.catalogUrls) {
+        HttpResponse response;
+        std::string candidateError;
+        if (!HttpGetToString(url, response, candidateError)) {
+            error = candidateError;
+            continue;
+        }
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+            error = "HTTP " + std::to_string(response.statusCode) + " ao ler " + url;
+            continue;
+        }
+
+        CatalogIndex remoteCatalog;
+        std::string parseError;
+        if (!LoadCatalogFromJsonString(response.body, remoteCatalog, parseError)) {
+            error = parseError;
+            continue;
+        }
+
+        const std::string existingCache = ReadTextFile(kCatalogCachePath);
+        if (existingCache != response.body) {
+            std::ofstream output(kCatalogCachePath, std::ios::binary | std::ios::trunc);
+            if (output.good()) {
+                output.write(response.body.data(), static_cast<std::streamsize>(response.body.size()));
+            }
+        }
+
+        state.catalog = std::move(remoteCatalog);
+        std::string thumbError;
+        EnsureThumbPackCache(state.catalog, thumbError, allowRemotePackDownload || !IsRyujinxGuestEnvironment());
+        ClearThumbnailFailures(state);
+        state.activeCatalogSource = url;
+        RefreshDerivedCheatEntries(state);
+        return true;
+    }
+
+    if (tryLoadLocalCatalog(kCatalogCachePath,
+                            english ? "Remote catalog unavailable. Using local cache."
+                                    : "Catálogo remoto indisponível. Usando cache local.")) {
+        return true;
+    }
+
+    if (tryLoadLocalCatalog(kSwitchLocalIndexPath,
+                            english ? "Using local synchronized catalog." : "Usando catálogo local sincronizado.")) {
+        return true;
+    }
+
+    state.statusLine = std::string(english ? "Failed to load catalog: " : "Falha ao carregar catálogo: ") + error;
+    return false;
+}
+
+std::string MakeCompatibilitySummary(const CatalogEntry& entry, const InstalledTitle* title) {
+    const std::string variantSummary = EntryHasVariants(entry) ? VariantListSummary(entry) : std::string();
+    if (!title) {
+        if (!variantSummary.empty()) {
+            return "Jogo não encontrado no console/emulador. Variantes disponíveis: " + variantSummary;
+        }
+        return "Jogo não encontrado no console/emulador.";
+    }
+    if (title->displayVersion.empty()) {
+        if (!variantSummary.empty()) {
+            return "Versão do jogo indisponível. Variantes disponíveis: " + variantSummary;
+        }
+        return "Versão do jogo indisponível.";
+    }
+    if (EntryMatchesInstalledVersion(entry, title)) {
+        return "Compatível com a versão instalada: " + title->displayVersion;
+    }
+
+    std::string message = "Atenção: pacote fora da faixa suportada para o jogo instalado (" + title->displayVersion + ").";
+    if (!variantSummary.empty()) {
+        message += " Variantes disponíveis: " + variantSummary + ".";
+    } else {
+        if (!entry.compatibility.minGameVersion.empty()) {
+            message += " Min: " + entry.compatibility.minGameVersion + ".";
+        }
+        if (!entry.compatibility.maxGameVersion.empty()) {
+            message += " Max: " + entry.compatibility.maxGameVersion + ".";
+        }
+        if (!entry.compatibility.exactGameVersions.empty()) {
+            message += " Exatas: ";
+            for (std::size_t index = 0; index < entry.compatibility.exactGameVersions.size(); ++index) {
+                if (index > 0) {
+                    message += ", ";
+                }
+                message += entry.compatibility.exactGameVersions[index];
+            }
+            message += '.';
+        }
+    }
+    return message;
+}
+
+void PrintLine(const std::string& text) {
+    std::printf("%s\n", text.c_str());
+}
+
+bool UseEnglish(const AppState& state) {
+    return state.config.language == LanguageMode::EnUs;
+}
+
+const char* UiText(const AppState& state, const char* ptBr, const char* enUs) {
+    return UseEnglish(state) ? enUs : ptBr;
+}
+
+std::string LocalizedEntryIntro(const AppState& state, const CatalogEntry& entry) {
+    if (UseEnglish(state)) {
+        if (!entry.introEnUs.empty()) {
+            return entry.introEnUs;
+        }
+        if (!entry.introPtBr.empty()) {
+            return entry.introPtBr;
+        }
+    } else {
+        if (!entry.introPtBr.empty()) {
+            return entry.introPtBr;
+        }
+        if (!entry.introEnUs.empty()) {
+            return entry.introEnUs;
+        }
+    }
+    return entry.intro;
+}
+
+std::string LocalizedEntrySummary(const AppState& state, const CatalogEntry& entry) {
+    if (UseEnglish(state)) {
+        if (!entry.summaryEnUs.empty()) {
+            return entry.summaryEnUs;
+        }
+        if (!entry.summaryPtBr.empty()) {
+            return entry.summaryPtBr;
+        }
+    } else {
+        if (!entry.summaryPtBr.empty()) {
+            return entry.summaryPtBr;
+        }
+        if (!entry.summaryEnUs.empty()) {
+            return entry.summaryEnUs;
+        }
+    }
+    return entry.summary;
+}
+
+std::string LocalizeContentTypeLabel(const AppState& state, const std::string& rawType) {
+    const std::string type = ToLowerAscii(rawType);
+    if (type == "translation") {
+        return UiText(state, "Tradução", "Translation");
+    }
+    if (type == "dub") {
+        return UiText(state, "Dublagem", "Dubbing");
+    }
+    if (type == "mod") {
+        return "Mod";
+    }
+    if (type == "cheat") {
+        return UiText(state, "Trapaça", "Cheat");
+    }
+    return rawType;
+}
+
+std::vector<std::string> EntryContentTypeLabels(const AppState& state, const CatalogEntry& entry) {
+    std::vector<std::string> labels;
+    const auto appendUnique = [&](const std::string& value) {
+        if (!value.empty() && std::find(labels.begin(), labels.end(), value) == labels.end()) {
+            labels.push_back(value);
+        }
+    };
+
+    for (const auto& type : entry.contentTypes) {
+        appendUnique(LocalizeContentTypeLabel(state, type));
+    }
+
+    if (labels.empty()) {
+        switch (entry.section) {
+            case ContentSection::Translations:
+                appendUnique(UiText(state, "Tradução", "Translation"));
+                break;
+            case ContentSection::ModsTools:
+                appendUnique("Mod");
+                break;
+            case ContentSection::Cheats:
+                appendUnique("Cheat");
+                break;
+            default:
+                break;
+        }
+    }
+
+    return labels;
+}
+
+std::string JoinLabels(const std::vector<std::string>& labels, const std::string& separator) {
+    std::string result;
+    for (std::size_t index = 0; index < labels.size(); ++index) {
+        if (index > 0) {
+            result += separator;
+        }
+        result += labels[index];
+    }
+    return result;
+}
+
+const CheatTitleRecord* FindCheatTitleRecord(const CheatsIndex& index, const std::string& titleId);
+const CheatBuildRecord* FindCheatBuildRecord(const CheatTitleRecord& title, const std::string& buildId);
+bool EntryUsesCheatsIndex(const AppState& state, const CatalogEntry& entry);
+
+std::string EntryVersionStatusLabel(const AppState& state, const CatalogEntry& entry, const InstalledTitle* installedTitle) {
+    if (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry)) {
+        if (installedTitle == nullptr || installedTitle->buildIdHex.empty()) {
+            return UiText(state, "Build Não Detectado", "Build Unknown");
+        }
+        const CheatTitleRecord* cheatTitle = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
+        if (cheatTitle != nullptr && FindCheatBuildRecord(*cheatTitle, installedTitle->buildIdHex) != nullptr) {
+            return UiText(state, "Mesmo Build", "Matching Build");
+        }
+        return UiText(state, "Build Divergente", "Build Mismatch");
+    }
+    if (installedTitle == nullptr || installedTitle->displayVersion.empty()) {
+        return UiText(state, "Versão Não Detectada", "Version Unknown");
+    }
+    if (EntryMatchesInstalledVersion(entry, installedTitle)) {
+        return UiText(state, "Mesma Versão", "Matching Version");
+    }
+    return UiText(state, "Versão Divergente", "Version Mismatch");
+}
+
+bool SectionRequiresInstallConfirmation(ContentSection section) {
+    return section == ContentSection::Translations || section == ContentSection::ModsTools || section == ContentSection::Cheats;
+}
+
+bool EntryHasCompatibilityRules(const CatalogEntry& entry) {
+    return !entry.compatibility.minGameVersion.empty() || !entry.compatibility.maxGameVersion.empty() ||
+           !entry.compatibility.exactGameVersions.empty();
+}
+
+bool CompatibilityRuleHasConstraints(const CompatibilityRule& rule) {
+    return !rule.minGameVersion.empty() || !rule.maxGameVersion.empty() || !rule.exactGameVersions.empty();
+}
+
+bool EntryHasVariants(const CatalogEntry& entry) {
+    return !entry.variants.empty();
+}
+
+std::string CompatibilityRuleLabel(const CompatibilityRule& rule) {
+    if (!rule.exactGameVersions.empty()) {
+        return JoinLabels(rule.exactGameVersions, ", ");
+    }
+    if (!rule.minGameVersion.empty() && !rule.maxGameVersion.empty()) {
+        return rule.minGameVersion + " - " + rule.maxGameVersion;
+    }
+    if (!rule.minGameVersion.empty()) {
+        return std::string(">= ") + rule.minGameVersion;
+    }
+    if (!rule.maxGameVersion.empty()) {
+        return std::string("<= ") + rule.maxGameVersion;
+    }
+    return {};
+}
+
+std::string VariantDisplayLabel(const CatalogVariant& variant) {
+    if (!variant.label.empty()) {
+        return variant.label;
+    }
+    const std::string compatibilityLabel = CompatibilityRuleLabel(variant.compatibility);
+    if (!compatibilityLabel.empty()) {
+        return compatibilityLabel;
+    }
+    if (!variant.packageVersion.empty()) {
+        return variant.packageVersion;
+    }
+    return variant.id;
+}
+
+const CatalogVariant* FindVariantById(const CatalogEntry& entry, const std::string& variantId) {
+    for (const auto& variant : entry.variants) {
+        if (variant.id == variantId) {
+            return &variant;
+        }
+    }
+    return nullptr;
+}
+
+std::vector<const CatalogVariant*> CollectAllVariants(const CatalogEntry& entry) {
+    std::vector<const CatalogVariant*> variants;
+    for (const auto& variant : entry.variants) {
+        variants.push_back(&variant);
+    }
+    return variants;
+}
+
+std::vector<const CatalogVariant*> FindCompatibleVariants(const CatalogEntry& entry, const InstalledTitle* installedTitle) {
+    std::vector<const CatalogVariant*> variants;
+    if (!installedTitle || installedTitle->displayVersion.empty()) {
+        return variants;
+    }
+    for (const auto& variant : entry.variants) {
+        if (MatchesCompatibility(variant.compatibility, installedTitle->displayVersion)) {
+            variants.push_back(&variant);
+        }
+    }
+    return variants;
+}
+
+bool EntryMatchesInstalledVersion(const CatalogEntry& entry, const InstalledTitle* installedTitle) {
+    if (installedTitle == nullptr || installedTitle->displayVersion.empty()) {
+        return false;
+    }
+    if (EntryHasVariants(entry)) {
+        return !FindCompatibleVariants(entry, installedTitle).empty();
+    }
+    return MatchesCompatibility(entry.compatibility, installedTitle->displayVersion);
+}
+
+bool EntryHasAnyCompatibilityInformation(const CatalogEntry& entry) {
+    if (EntryHasCompatibilityRules(entry)) {
+        return true;
+    }
+    for (const auto& variant : entry.variants) {
+        if (CompatibilityRuleHasConstraints(variant.compatibility)) {
+            return true;
+        }
+    }
+    return false;
+}
+
+CatalogEntry ResolveEntryForVariant(const CatalogEntry& entry, const CatalogVariant* variant) {
+    CatalogEntry resolved = entry;
+    if (variant == nullptr) {
+        return resolved;
+    }
+    if (!variant->downloadUrl.empty()) {
+        resolved.downloadUrl = variant->downloadUrl;
+    }
+    if (!variant->packageVersion.empty()) {
+        resolved.packageVersion = variant->packageVersion;
+    }
+    if (!variant->contentRevision.empty()) {
+        resolved.contentRevision = variant->contentRevision;
+    }
+    resolved.compatibility = variant->compatibility;
+    return resolved;
+}
+
+std::string VariantListSummary(const CatalogEntry& entry) {
+    std::vector<std::string> labels;
+    for (const auto& variant : entry.variants) {
+        AppendUniqueString(labels, VariantDisplayLabel(variant));
+    }
+    return JoinLabels(labels, ", ");
+}
+
+const CatalogEntry* FindCatalogEntryById(const CatalogIndex& catalog, const std::string& entryId) {
+    for (const auto& entry : catalog.entries) {
+        if (entry.id == entryId) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+const CatalogEntry* FindVisibleEntryById(const AppState& state, const std::string& entryId) {
+    if (const CatalogEntry* entry = FindCatalogEntryById(state.catalog, entryId)) {
+        return entry;
+    }
+    for (const auto& entry : state.derivedCheatEntries) {
+        if (entry.id == entryId) {
+            return &entry;
+        }
+    }
+    return nullptr;
+}
+
+const CheatTitleRecord* FindCheatTitleRecord(const CheatsIndex& index, const std::string& titleId) {
+    const std::string normalizedTitleId = ToLowerAscii(titleId);
+    for (const auto& title : index.titles) {
+        if (ToLowerAscii(title.titleId) == normalizedTitleId) {
+            return &title;
+        }
+    }
+    return nullptr;
+}
+
+const CheatBuildRecord* FindCheatBuildRecord(const CheatTitleRecord& title, const std::string& buildId) {
+    const std::string normalizedBuildId = ToLowerAscii(buildId);
+    for (const auto& build : title.builds) {
+        if (build.buildId == normalizedBuildId) {
+            return &build;
+        }
+    }
+    return nullptr;
+}
+
+const CheatEntryRecord* BestCheatEntryForBuild(const CheatBuildRecord& build) {
+    const CheatEntryRecord* best = nullptr;
+    for (const auto& entry : build.entries) {
+        if (best == nullptr || entry.priorityRank < best->priorityRank ||
+            (entry.priorityRank == best->priorityRank && entry.sources.size() > best->sources.size())) {
+            best = &entry;
+        }
+    }
+    return best;
+}
+
+std::string CheatBuildLabel(const CheatBuildRecord& build) {
+    std::string label = build.buildId;
+    const CheatEntryRecord* best = BestCheatEntryForBuild(build);
+    if (best != nullptr && !best->categories.empty()) {
+        label += " • " + JoinLabels(best->categories, ", ");
+    }
+    return label;
+}
+
+std::vector<std::string> CollectCheatBuildIds(const CheatTitleRecord& title) {
+    std::vector<std::string> buildIds;
+    for (const auto& build : title.builds) {
+        buildIds.push_back(build.buildId);
+    }
+    return buildIds;
+}
+
+bool EntryUsesCheatsIndex(const AppState& state, const CatalogEntry& entry) {
+    return entry.section == ContentSection::Cheats &&
+           FindCheatTitleRecord(state.cheatsIndex, entry.titleId) != nullptr;
+}
+
+std::string LocalizedCheatCategoryLabel(const AppState& state, const std::string& rawCategory) {
+    const std::string category = ToLowerAscii(rawCategory);
+    if (category == "general") {
+        return UiText(state, "Geral", "General");
+    }
+    if (category == "graphics") {
+        return UiText(state, "Gráficos", "Graphics");
+    }
+    if (category == "fps" || category == "60fps") {
+        return "60FPS";
+    }
+    if (category == "community") {
+        return UiText(state, "Comunidade", "Community");
+    }
+    return rawCategory;
+}
+
+std::string LocalizedCheatSourceLabel(const AppState& state, const std::string& rawSource) {
+    const std::string source = ToLowerAscii(rawSource);
+    if (source == "titledb") {
+        return "TitleDB";
+    }
+    if (source == "gbatempmirror") {
+        return "GBAtemp Mirror";
+    }
+    if (source == "cheatslips") {
+        return "Cheat Slips";
+    }
+    if (source == "chansey") {
+        return "Chansey";
+    }
+    if (source == "ibnux") {
+        return "ibnux";
+    }
+    return rawSource;
+}
+
+std::string SummarizeLabelList(const std::vector<std::string>& labels, std::size_t maxVisible) {
+    if (labels.empty()) {
+        return {};
+    }
+
+    std::vector<std::string> visible;
+    const std::size_t clampedVisible = std::min(maxVisible, labels.size());
+    for (std::size_t index = 0; index < clampedVisible; ++index) {
+        visible.push_back(labels[index]);
+    }
+
+    std::string summary = JoinLabels(visible, ", ");
+    if (labels.size() > clampedVisible) {
+        summary += " +" + std::to_string(labels.size() - clampedVisible);
+    }
+    return summary;
+}
+
+std::vector<std::string> CollectCheatCategoriesLocalized(const AppState& state, const CheatTitleRecord& title) {
+    std::vector<std::string> labels;
+    for (const auto& build : title.builds) {
+        for (const auto& category : build.categories) {
+            AppendUniqueString(labels, LocalizedCheatCategoryLabel(state, category));
+        }
+        for (const auto& entry : build.entries) {
+            for (const auto& category : entry.categories) {
+                AppendUniqueString(labels, LocalizedCheatCategoryLabel(state, category));
+            }
+        }
+    }
+    return labels;
+}
+
+std::vector<std::string> CollectCheatSourcesLocalized(const AppState& state, const CheatTitleRecord& title) {
+    std::vector<std::string> labels;
+    for (const auto& build : title.builds) {
+        for (const auto& entry : build.entries) {
+            if (!entry.primarySource.empty()) {
+                AppendUniqueString(labels, LocalizedCheatSourceLabel(state, entry.primarySource));
+            }
+            for (const auto& source : entry.sources) {
+                AppendUniqueString(labels, LocalizedCheatSourceLabel(state, source));
+            }
+        }
+    }
+    return labels;
+}
+
+const CheatBuildRecord* PreferredCheatBuildForDisplay(const AppState& state,
+                                                      const CatalogEntry& entry,
+                                                      const InstalledTitle* installedTitle) {
+    const CheatTitleRecord* title = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
+    if (title == nullptr || title->builds.empty()) {
+        return nullptr;
+    }
+    if (installedTitle != nullptr && !installedTitle->buildIdHex.empty()) {
+        if (const CheatBuildRecord* matchingBuild = FindCheatBuildRecord(*title, installedTitle->buildIdHex)) {
+            return matchingBuild;
+        }
+    }
+    return &title->builds.front();
+}
+
+std::string CheatBuildCountLabel(const AppState& state, std::size_t buildCount) {
+    if (buildCount == 1) {
+        return UiText(state, "1 build", "1 build");
+    }
+    return std::to_string(buildCount) + " " + UiText(state, "builds", "builds");
+}
+
+std::string CheatCardSubtitle(const AppState& state, const CatalogEntry& entry, const InstalledTitle* installedTitle) {
+    const CheatTitleRecord* title = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
+    if (title == nullptr) {
+        return JoinLabels(EntryContentTypeLabels(state, entry), ", ");
+    }
+
+    const CheatBuildRecord* preferredBuild = PreferredCheatBuildForDisplay(state, entry, installedTitle);
+    std::vector<std::string> parts;
+
+    if (preferredBuild != nullptr) {
+        std::vector<std::string> categories;
+        for (const auto& category : preferredBuild->categories) {
+            AppendUniqueString(categories, LocalizedCheatCategoryLabel(state, category));
+        }
+        if (categories.empty()) {
+            for (const auto& item : preferredBuild->entries) {
+                for (const auto& category : item.categories) {
+                    AppendUniqueString(categories, LocalizedCheatCategoryLabel(state, category));
+                }
+            }
+        }
+        const std::string categoriesSummary = SummarizeLabelList(categories, 2);
+        if (!categoriesSummary.empty()) {
+            parts.push_back(categoriesSummary);
+        }
+
+        const CheatEntryRecord* bestEntry = BestCheatEntryForBuild(*preferredBuild);
+        if (bestEntry != nullptr) {
+            std::vector<std::string> sources;
+            if (!bestEntry->primarySource.empty()) {
+                AppendUniqueString(sources, LocalizedCheatSourceLabel(state, bestEntry->primarySource));
+            }
+            for (const auto& source : bestEntry->sources) {
+                AppendUniqueString(sources, LocalizedCheatSourceLabel(state, source));
+            }
+            const std::string sourceSummary = SummarizeLabelList(sources, 2);
+            if (!sourceSummary.empty()) {
+                parts.push_back(sourceSummary);
+            }
+        }
+    }
+
+    parts.push_back(CheatBuildCountLabel(state, title->builds.size()));
+    return JoinLabels(parts, " • ");
+}
+
+std::string InstalledCheatBuildId(const InstallReceipt& receipt) {
+    for (const auto& file : receipt.files) {
+        const std::size_t slash = file.find_last_of("/\\");
+        const std::string filename = slash == std::string::npos ? file : file.substr(slash + 1);
+        if (filename.size() > 4 && filename.substr(filename.size() - 4) == ".txt") {
+            return filename.substr(0, filename.size() - 4);
+        }
+    }
+    return {};
+}
+
+bool ShouldConfirmInstall(const AppState& state,
+                          const CatalogEntry& entry,
+                          const InstalledTitle* installedTitle,
+                          std::string& title,
+                          std::string& message) {
+    if (!SectionRequiresInstallConfirmation(entry.section)) {
+        return false;
+    }
+
+    if (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry)) {
+        const CheatTitleRecord* cheatTitle = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
+        if (installedTitle == nullptr) {
+            title = UiText(state, "Título não detectado", "Title not detected");
+            message = UiText(state,
+                             "O título não foi detectado no console/emulador. Escolher manualmente um build de cheats?",
+                             "The title was not detected on the console/emulator. Choose a cheat build manually?");
+            return true;
+        }
+
+        if (installedTitle->buildIdHex.empty()) {
+            title = UiText(state, "Build não detectado", "Build not detected");
+            message = UiText(state,
+                             "O build ID do jogo não pôde ser detectado. Escolher manualmente um build de cheats?",
+                             "The game's build ID could not be detected. Choose a cheat build manually?");
+            return true;
+        }
+
+        if (cheatTitle == nullptr || FindCheatBuildRecord(*cheatTitle, installedTitle->buildIdHex) == nullptr) {
+            title = UiText(state, "Build diferente", "Build mismatch");
+            message = std::string(UiText(state,
+                                         "Não há cheats publicados para o build detectado (",
+                                         "There are no published cheats for the detected build (")) +
+                      installedTitle->buildIdHex + "). " +
+                      UiText(state, "Escolher manualmente outro build?", "Choose another build manually?");
+            return true;
+        }
+
+        return false;
+    }
+
+    if (installedTitle == nullptr) {
+        title = UiText(state, "Título não detectado", "Title not detected");
+        message = UiText(state,
+                         "O título não foi detectado no console/emulador. Prosseguir com a instalação?",
+                         "The title was not detected on the console/emulator. Continue with installation?");
+        return true;
+    }
+
+    if (installedTitle->displayVersion.empty()) {
+        title = UiText(state, "Versão não detectada", "Version not detected");
+        message = UiText(state,
+                         "A versão do jogo não pôde ser detectada. Prosseguir com a instalação?",
+                         "The game version could not be detected. Continue with installation?");
+        return true;
+    }
+
+    if (!EntryHasAnyCompatibilityInformation(entry)) {
+        title = UiText(state, "Compatibilidade não especificada", "Compatibility unspecified");
+        message = UiText(state,
+                         "O pacote não possui versão compatível especificada. Prosseguir com a instalação?",
+                         "This package does not specify compatible game versions. Continue with installation?");
+        return true;
+    }
+
+    if (!EntryMatchesInstalledVersion(entry, installedTitle)) {
+        title = UiText(state, "Versão divergente", "Version mismatch");
+        message = std::string(UiText(state,
+                                     "A versão detectada do jogo é diferente da compatível com o pacote (",
+                                     "The detected game version differs from the package compatibility (")) +
+                  installedTitle->displayVersion + "). " +
+                  UiText(state, "Prosseguir com a instalação?", "Continue with installation?");
+        return true;
+    }
+
+    return false;
+}
+
+void ShowInstallConfirmation(AppState& state, const CatalogEntry& entry, const std::string& title, const std::string& message) {
+    state.installConfirmVisible = true;
+    state.installConfirmEntryId = entry.id;
+    state.installConfirmTitle = title;
+    state.installConfirmMessage = message;
+}
+
+void ClearInstallConfirmation(AppState& state) {
+    state.installConfirmVisible = false;
+    state.installConfirmEntryId.clear();
+    state.installConfirmTitle.clear();
+    state.installConfirmMessage.clear();
+}
+
+void ShowVariantSelection(AppState& state,
+                          const CatalogEntry& entry,
+                          const std::vector<const CatalogVariant*>& variants,
+                          const std::string& title,
+                          const std::string& message) {
+    state.variantSelectVisible = true;
+    state.variantSelectEntryId = entry.id;
+    state.variantSelectTitle = title;
+    state.variantSelectMessage = message;
+    state.variantSelectIds.clear();
+    for (const CatalogVariant* variant : variants) {
+        if (variant != nullptr) {
+            state.variantSelectIds.push_back(variant->id);
+        }
+    }
+    state.variantSelectSelection = 0;
+}
+
+void ClearVariantSelection(AppState& state) {
+    state.variantSelectVisible = false;
+    state.variantSelectEntryId.clear();
+    state.variantSelectTitle.clear();
+    state.variantSelectMessage.clear();
+    state.variantSelectIds.clear();
+    state.variantSelectSelection = 0;
+}
+
+void ShowCheatBuildSelection(AppState& state,
+                             const CatalogEntry& entry,
+                             const std::vector<std::string>& buildIds,
+                             const std::string& title,
+                             const std::string& message) {
+    state.cheatBuildSelectVisible = true;
+    state.cheatBuildEntryId = entry.id;
+    state.cheatBuildTitleId = ToLowerAscii(entry.titleId);
+    state.cheatBuildTitle = title;
+    state.cheatBuildMessage = message;
+    state.cheatBuildIds = buildIds;
+    state.cheatBuildSelection = 0;
+}
+
+void ClearCheatBuildSelection(AppState& state) {
+    state.cheatBuildSelectVisible = false;
+    state.cheatBuildEntryId.clear();
+    state.cheatBuildTitleId.clear();
+    state.cheatBuildTitle.clear();
+    state.cheatBuildMessage.clear();
+    state.cheatBuildIds.clear();
+    state.cheatBuildSelection = 0;
+}
+
+const CatalogVariant* SelectedVariantForPopup(const AppState& state, const CatalogEntry& entry) {
+    if (state.variantSelectIds.empty()) {
+        return nullptr;
+    }
+    const std::size_t index = std::min(state.variantSelectSelection, state.variantSelectIds.size() - 1);
+    return FindVariantById(entry, state.variantSelectIds[index]);
+}
+
+std::string VariantSelectionTitle(const AppState& state) {
+    return UiText(state, "Escolha a variante", "Choose variant");
+}
+
+std::string VariantSelectionMessage(const AppState& state, const InstalledTitle* installedTitle, bool fallbackToAll) {
+    if (installedTitle == nullptr) {
+        return UiText(state,
+                      "Selecione a variante do pacote para instalar neste título.",
+                      "Select which package variant should be installed for this title.");
+    }
+    if (installedTitle->displayVersion.empty()) {
+        return UiText(state,
+                      "A versão do jogo não foi detectada. Escolha manualmente a variante do pacote.",
+                      "The game version was not detected. Choose the package variant manually.");
+    }
+    if (fallbackToAll) {
+        return std::string(UiText(state,
+                                  "Nenhuma variante coincide exatamente com a versão detectada (",
+                                  "No variant matches the detected game version (")) +
+               installedTitle->displayVersion + "). " +
+               UiText(state, "Escolha como deseja prosseguir.", "Choose how to proceed.");
+    }
+    return std::string(UiText(state,
+                              "Mais de uma variante é compatível com a versão detectada (",
+                              "More than one variant is compatible with the detected game version (")) +
+           installedTitle->displayVersion + "). " +
+           UiText(state, "Escolha a variante desejada.", "Choose the variant to install.");
+}
+
+const CheatBuildRecord* SelectedCheatBuildForPopup(const AppState& state, const CheatsIndex& index, const CatalogEntry& entry) {
+    if (state.cheatBuildIds.empty()) {
+        return nullptr;
+    }
+    const CheatTitleRecord* title = FindCheatTitleRecord(index, entry.titleId);
+    if (title == nullptr) {
+        return nullptr;
+    }
+    const std::size_t indexValue = std::min(state.cheatBuildSelection, state.cheatBuildIds.size() - 1);
+    return FindCheatBuildRecord(*title, state.cheatBuildIds[indexValue]);
+}
+
+const CatalogEntry* FindCheatBuildEntryForPopup(const AppState& state) {
+    if (const CatalogEntry* entry = FindVisibleEntryById(state, state.cheatBuildEntryId)) {
+        return entry;
+    }
+
+    const std::string normalizedTitleId = ToLowerAscii(state.cheatBuildTitleId);
+    for (const auto& entry : state.derivedCheatEntries) {
+        if (entry.section == ContentSection::Cheats && ToLowerAscii(entry.titleId) == normalizedTitleId) {
+            return &entry;
+        }
+    }
+
+    return nullptr;
+}
+
+std::string CheatBuildSelectionTitle(const AppState& state) {
+    return UiText(state, "Escolha o build do cheat", "Choose cheat build");
+}
+
+std::string CheatBuildSelectionMessage(const AppState& state, const InstalledTitle* installedTitle, bool fallbackToAll) {
+    if (installedTitle == nullptr) {
+        return UiText(state,
+                      "Selecione manualmente o build de cheats para este título.",
+                      "Select the cheat build manually for this title.");
+    }
+    if (installedTitle->buildIdHex.empty()) {
+        return UiText(state,
+                      "O build ID do jogo não foi detectado. Escolha manualmente o build de cheats.",
+                      "The game's build ID was not detected. Choose the cheat build manually.");
+    }
+    if (fallbackToAll) {
+        return std::string(UiText(state,
+                                  "Nenhum cheat coincide com o build detectado (",
+                                  "No cheat matches the detected build (")) +
+               installedTitle->buildIdHex + "). " +
+               UiText(state, "Escolha como deseja prosseguir.", "Choose how to proceed.");
+    }
+    return std::string(UiText(state,
+                              "Mais de um conjunto de cheats está disponível para o build detectado (",
+                              "More than one cheat set is available for the detected build (")) +
+           installedTitle->buildIdHex + "). " +
+           UiText(state, "Escolha o build desejado.", "Choose the desired build.");
+}
+
+bool InstallResolvedEntry(AppState& state, const CatalogEntry& entry, const CatalogVariant* variant) {
+    const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
+    const CatalogEntry resolvedEntry = ResolveEntryForVariant(entry, variant);
+    if (resolvedEntry.downloadUrl.empty()) {
+        state.statusLine = UiText(state,
+                                  "Nenhum download disponível para esta entrada/variante.",
+                                  "No download is available for this entry/variant.");
+        return false;
+    }
+
+    SetProgress(state,
+                UiText(state, u8"Instalando pacote", "Installing package"),
+                entry.name,
+                15);
+    InstallReceipt newReceipt;
+
+    std::string error;
+    if (InstallPackage(resolvedEntry, installedTitle, newReceipt, error)) {
+        SetProgress(state,
+                    UiText(state, u8"Instalando pacote", "Installing package"),
+                    entry.name,
+                    100);
+        state.statusLine = std::string(UseEnglish(state) ? "Package installed: " : "Pacote instalado: ") + entry.name;
+        std::string note;
+        state.receipts = LoadInstallReceipts(note);
+        ClearProgress(state);
+        return true;
+    }
+
+    state.statusLine = std::string(UseEnglish(state) ? "Installation failed: " : "Falha na instalação: ") + error;
+    ClearProgress(state);
+    return false;
+}
+
+bool InstallCheatBuild(AppState& state, const CatalogEntry& entry, const CheatBuildRecord& build) {
+    const CheatEntryRecord* cheatEntry = BestCheatEntryForBuild(build);
+    if (cheatEntry == nullptr) {
+        state.statusLine = UiText(state,
+                                  "Nenhum arquivo de cheat disponível para este build.",
+                                  "No cheat file is available for this build.");
+        return false;
+    }
+
+    InstallReceipt existingReceipt;
+    if (FindReceiptForPackage(state.receipts, entry.id, &existingReceipt)) {
+        std::string uninstallError;
+        UninstallPackage(existingReceipt, uninstallError);
+    }
+
+    const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
+    SetProgress(state,
+                UiText(state, u8"Instalando trapaça", "Installing cheat"),
+                build.buildId,
+                20);
+    InstallReceipt newReceipt;
+
+    std::string error;
+    bool installed = false;
+
+    if (!cheatEntry->relativePath.empty()) {
+        std::string cheatPackError;
+        if (EnsureCheatPackCache(state.cheatsIndex, cheatPackError)) {
+            const std::string packPath = CheatPackPathForEntry(state.cheatsIndex, *cheatEntry);
+            if (FileHasContent(packPath)) {
+                installed = InstallCheatTextFromFile(entry, build.buildId, packPath, installedTitle, newReceipt, error);
+            }
+        } else {
+            error = cheatPackError;
+        }
+    }
+
+    if (!installed && !cheatEntry->downloadUrl.empty() && !IsRyujinxGuestEnvironment()) {
+        installed = InstallCheatText(entry, build.buildId, cheatEntry->downloadUrl, installedTitle, newReceipt, error);
+    }
+
+    if (!installed && IsRyujinxGuestEnvironment() && error.empty()) {
+        error = UseEnglish(state) ? "Ryujinx requires local synced cheat cache."
+                                  : "Ryujinx requer cache local sincronizado de cheats.";
+    }
+
+    if (installed) {
+        SetProgress(state,
+                    UiText(state, u8"Instalando trapaça", "Installing cheat"),
+                    build.buildId,
+                    100);
+        state.statusLine = std::string(UseEnglish(state) ? "Cheat installed for build: " : "Cheat instalado para o build: ") +
+                           build.buildId;
+        std::string note;
+        state.receipts = LoadInstallReceipts(note);
+        ClearProgress(state);
+        return true;
+    }
+
+    state.statusLine = std::string(UseEnglish(state) ? "Cheat installation failed: " : u8"Falha na instalação da trapaça: ") + error;
+    ClearProgress(state);
+    return false;
+}
+
+bool BeginCheatIndexInstall(AppState& state,
+                            const CatalogEntry& entry,
+                            const InstalledTitle* installedTitle,
+                            bool allowFallbackToAllBuilds) {
+    if (!EntryUsesCheatsIndex(state, entry)) {
+        return InstallResolvedEntry(state, entry, nullptr);
+    }
+
+    const CheatTitleRecord* title = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
+    if (title == nullptr || title->builds.empty()) {
+        state.statusLine = UiText(state,
+                                  "Nenhum cheat publicado foi encontrado para este título.",
+                                  "No published cheats were found for this title.");
+        return false;
+    }
+
+    if (installedTitle != nullptr && !installedTitle->buildIdHex.empty()) {
+        if (const CheatBuildRecord* exactBuild = FindCheatBuildRecord(*title, installedTitle->buildIdHex)) {
+            return InstallCheatBuild(state, entry, *exactBuild);
+        }
+    }
+
+    if (!allowFallbackToAllBuilds) {
+        state.statusLine = UiText(state,
+                                  "Cheat depende de build específico; confirmação necessária para escolher manualmente.",
+                                  "Cheat depends on a specific build; confirmation is required to choose manually.");
+        return false;
+    }
+
+    ShowCheatBuildSelection(state,
+                            entry,
+                            CollectCheatBuildIds(*title),
+                            CheatBuildSelectionTitle(state),
+                            CheatBuildSelectionMessage(state, installedTitle, true));
+    return false;
+}
+
+bool BeginVariantAwareInstall(AppState& state,
+                              const CatalogEntry& entry,
+                              const InstalledTitle* installedTitle,
+                              bool allowFallbackToAllVariants) {
+    if (!EntryHasVariants(entry)) {
+        return InstallResolvedEntry(state, entry, nullptr);
+    }
+
+    std::vector<const CatalogVariant*> candidates = FindCompatibleVariants(entry, installedTitle);
+    if (candidates.empty() && allowFallbackToAllVariants) {
+        candidates = CollectAllVariants(entry);
+    }
+
+    if (candidates.empty()) {
+        state.statusLine = UiText(state,
+                                  "Nenhuma variante compatível ou selecionável foi encontrada.",
+                                  "No compatible or selectable variant was found.");
+        return false;
+    }
+
+    if (candidates.size() == 1) {
+        return InstallResolvedEntry(state, entry, candidates.front());
+    }
+
+    ShowVariantSelection(state,
+                         entry,
+                         candidates,
+                         VariantSelectionTitle(state),
+                         VariantSelectionMessage(state, installedTitle, allowFallbackToAllVariants));
+    return false;
+}
+
+std::string NormalizeFooterStatus(std::string text) {
+    const auto replaceAll = [&](const std::string& from, const std::string& to) {
+        std::size_t pos = 0;
+        while ((pos = text.find(from, pos)) != std::string::npos) {
+            text.replace(pos, from.size(), to);
+            pos += to.size();
+        }
+    };
+
+    replaceAll("\r\n", u8" • ");
+    replaceAll("\n", u8" • ");
+    replaceAll("\r", u8" • ");
+    replaceAll("Ambiente não confirmado. Modo automático segue em fallback seguro até detectar console com confiança.",
+               "Modo automático segue em fallback");
+    replaceAll("Unconfirmed environment. Auto mode remains in safe fallback until a console is detected with confidence.",
+               "Auto mode stays in fallback");
+    return text;
+}
+
+bool UseDarkTheme(const AppState& state) {
+    return state.config.theme == ThemeMode::Dark;
+}
+
+bool IsRyujinxGuestEnvironment() {
+    return ToLowerAscii(GetLoaderInfoSummary()).find("ryujinx") != std::string::npos;
+}
+
+std::string ThemeModeLabelLocalized(const AppState& state, ThemeMode mode) {
+    if (!UseEnglish(state)) {
+        return mode == ThemeMode::Dark ? "Escuro" : "Claro";
+    }
+    return mode == ThemeMode::Dark ? "Dark" : "Light";
+}
+
+ThemePalette ApplyUnifiedBorders(ThemePalette palette, std::uint32_t border = gfx::Rgba(175, 148, 67)) {
+    palette.sidebarBorder = border;
+    palette.sidebarBorderFocused = border;
+    palette.sidebarItemBorder = border;
+    palette.sidebarItemBorderSelected = border;
+    palette.actionBorder = border;
+    palette.actionBorderActive = border;
+    palette.statusBorder = border;
+    palette.contentPanelBorder = border;
+    palette.contentPanelBorderFocused = border;
+    palette.emptyBorder = border;
+    palette.entryBorder = border;
+    palette.entryBorderSelected = border;
+    palette.coverBorder = border;
+    palette.detailsBorder = border;
+    palette.buttonPrimaryBorder = border;
+    palette.buttonPrimaryBorderActive = border;
+    palette.buttonSecondaryBorder = border;
+    palette.footerBorder = border;
+    return palette;
+}
+
+ThemePalette ApplyLightSurfaceTone(ThemePalette palette) {
+    const std::uint32_t tone = gfx::Rgba(255, 252, 244);
+    palette.entryFill = tone;
+    palette.statusFill = tone;
+    return palette;
+}
+
+ThemePalette ApplyRequestedLightPalette(ThemePalette palette) {
+    const std::uint32_t text = gfx::Rgba(45, 45, 45);
+    const std::uint32_t selected = gfx::Rgba(226, 190, 96);
+    const std::uint32_t pale = gfx::Rgba(250, 242, 211);
+    const std::uint32_t status = gfx::Rgba(250, 230, 200);
+    const std::uint32_t background = gfx::Rgba(240, 240, 240);
+    const std::uint32_t muted = gfx::Rgba(96, 96, 96);
+    const std::uint32_t warning = gfx::Rgba(201, 140, 74);
+
+    palette.windowTop = background;
+    palette.windowBottom = background;
+    palette.windowBase = background;
+    palette.sidebarFill = background;
+    palette.sidebarHeaderFill = background;
+    palette.contentPanelFill = background;
+    palette.contentHeaderFill = background;
+    palette.detailsFill = background;
+    palette.emptyFill = background;
+    palette.coverFill = background;
+
+    palette.sidebarItemFill = pale;
+    palette.sidebarItemFillSelected = selected;
+    palette.entryFill = pale;
+    palette.entryFillSelected = selected;
+    palette.actionFill = pale;
+    palette.buttonPrimaryFill = pale;
+    palette.buttonSecondaryFill = pale;
+
+    palette.statusFill = status;
+    palette.footerFill = status;
+    palette.chipSuggestedFill = gfx::Rgba(118, 111, 72);
+    palette.chipInstalledFill = gfx::Rgba(87, 116, 81);
+    palette.chipNeutralFill = gfx::Rgba(103, 103, 103);
+
+    palette.sidebarItemText = text;
+    palette.sidebarItemTextSelected = text;
+    palette.headerText = text;
+    palette.headerMetaText = text;
+    palette.primaryText = text;
+    palette.secondaryText = text;
+    palette.accentText = text;
+    palette.actionText = text;
+    palette.statusText = text;
+    palette.footerText = text;
+    palette.buttonTextPrimary = text;
+    palette.buttonTextSecondary = text;
+    palette.actionBadgeText = text;
+    palette.buttonBadgeTextPrimary = text;
+    palette.buttonBadgeTextSecondary = text;
+    palette.chipSuggestedText = gfx::Rgba(244, 236, 204);
+    palette.chipInstalledText = gfx::Rgba(226, 240, 222);
+    palette.chipNeutralText = gfx::Rgba(244, 244, 244);
+    palette.mutedText = muted;
+    palette.warningText = warning;
+
+    palette.entryAccent = gfx::Rgba(88, 88, 88);
+    palette.entryAccentSelected = gfx::Rgba(88, 88, 88);
+    palette.actionBadgeOuter = palette.actionBadgeInner;
+    palette.actionBadgeOuterActive = palette.actionBadgeInner;
+    palette.buttonBadgeOuter = palette.buttonBadgeInnerPrimary;
+
+    return palette;
+}
+
+ThemePalette ApplySharedThemeFinishing(ThemePalette palette) {
+    const std::uint32_t gold = gfx::Rgba(175, 148, 67);
+    const std::uint32_t headerText = gfx::Rgba(45, 45, 45);
+
+    palette = ApplyUnifiedBorders(palette, gold);
+    palette.sidebarHeaderFill = gold;
+    palette.contentHeaderFill = gold;
+    palette.headerText = headerText;
+    palette.headerMetaText = headerText;
+    palette.entryFill = palette.sidebarItemFill;
+    palette.entryFillSelected = palette.sidebarItemFillSelected;
+    palette.entryAccentSelected = palette.entryAccent;
+    return palette;
+}
+
+ThemePalette GetThemePalette(const AppState& state) {
+    if (UseDarkTheme(state)) {
+        return ApplySharedThemeFinishing(ApplyUnifiedBorders({
+            gfx::Rgba(15, 15, 14),
+            gfx::Rgba(8, 8, 8),
+            gfx::Rgba(11, 11, 10),
+            gfx::Rgba(16, 17, 16),
+            gfx::Rgba(123, 111, 77),
+            gfx::Rgba(201, 174, 98),
+            gfx::Rgba(6, 6, 6),
+            gfx::Rgba(233, 221, 189),
+            gfx::Rgba(210, 194, 150),
+            gfx::Rgba(38, 39, 41),
+            gfx::Rgba(74, 75, 78),
+            gfx::Rgba(226, 190, 96),
+            gfx::Rgba(239, 211, 138),
+            gfx::Rgba(228, 220, 202),
+            gfx::Rgba(42, 33, 12),
+            gfx::Rgba(39, 40, 42),
+            gfx::Rgba(77, 78, 82),
+            gfx::Rgba(199, 173, 101),
+            gfx::Rgba(210, 184, 111),
+            gfx::Rgba(226, 190, 96),
+            gfx::Rgba(44, 34, 13),
+            gfx::Rgba(232, 221, 193),
+            gfx::Rgba(228, 220, 202),
+            gfx::Rgba(39, 40, 42),
+            gfx::Rgba(79, 80, 84),
+            gfx::Rgba(228, 220, 202),
+            gfx::Rgba(12, 12, 12),
+            gfx::Rgba(123, 111, 77),
+            gfx::Rgba(201, 174, 98),
+            gfx::Rgba(6, 6, 6),
+            gfx::Rgba(41, 42, 44),
+            gfx::Rgba(76, 77, 81),
+            gfx::Rgba(61, 62, 66),
+            gfx::Rgba(70, 71, 75),
+            gfx::Rgba(127, 115, 80),
+            gfx::Rgba(225, 190, 98),
+            gfx::Rgba(226, 190, 96),
+            gfx::Rgba(240, 206, 120),
+            gfx::Rgba(34, 34, 34),
+            gfx::Rgba(88, 89, 91),
+            gfx::Rgba(12, 12, 12),
+            gfx::Rgba(123, 111, 77),
+            gfx::Rgba(238, 233, 224),
+            gfx::Rgba(208, 202, 190),
+            gfx::Rgba(176, 170, 158),
+            gfx::Rgba(212, 185, 109),
+            gfx::Rgba(212, 151, 83),
+            gfx::Rgba(87, 86, 62),
+            gfx::Rgba(244, 236, 204),
+            gfx::Rgba(67, 89, 70),
+            gfx::Rgba(212, 240, 208),
+            gfx::Rgba(80, 81, 83),
+            gfx::Rgba(224, 220, 212),
+            gfx::Rgba(48, 49, 52),
+            gfx::Rgba(188, 164, 96),
+            gfx::Rgba(225, 190, 98),
+            gfx::Rgba(43, 44, 46),
+            gfx::Rgba(92, 93, 96),
+            gfx::Rgba(240, 235, 226),
+            gfx::Rgba(232, 227, 219),
+            gfx::Rgba(213, 182, 103),
+            gfx::Rgba(225, 190, 96),
+            gfx::Rgba(225, 190, 96),
+            gfx::Rgba(51, 38, 13),
+            gfx::Rgba(51, 38, 13),
+            gfx::Rgba(26, 27, 28),
+            gfx::Rgba(123, 111, 77),
+            gfx::Rgba(228, 220, 202),
+        }));
+    }
+
+    return ApplySharedThemeFinishing(ApplyRequestedLightPalette(ApplyLightSurfaceTone({
+        gfx::Rgba(252, 249, 241),
+        gfx::Rgba(243, 237, 225),
+        gfx::Rgba(248, 244, 236),
+        gfx::Rgba(246, 247, 248),
+        gfx::Rgba(224, 214, 193),
+        gfx::Rgba(212, 182, 100),
+        gfx::Rgba(237, 241, 245),
+        gfx::Rgba(41, 39, 36),
+        gfx::Rgba(74, 70, 61),
+        gfx::Rgba(241, 244, 247),
+        gfx::Rgba(219, 223, 228),
+        gfx::Rgba(237, 196, 86),
+        gfx::Rgba(219, 184, 84),
+        gfx::Rgba(51, 50, 47),
+        gfx::Rgba(62, 50, 20),
+        gfx::Rgba(240, 243, 246),
+        gfx::Rgba(214, 218, 223),
+        gfx::Rgba(212, 182, 100),
+        gfx::Rgba(230, 205, 133),
+        gfx::Rgba(232, 194, 86),
+        gfx::Rgba(255, 244, 209),
+        gfx::Rgba(124, 91, 24),
+        gfx::Rgba(55, 53, 49),
+        gfx::Rgba(241, 244, 247),
+        gfx::Rgba(214, 218, 223),
+        gfx::Rgba(55, 53, 49),
+        gfx::Rgba(253, 252, 249),
+        gfx::Rgba(224, 214, 193),
+        gfx::Rgba(212, 182, 100),
+        gfx::Rgba(239, 243, 246),
+        gfx::Rgba(251, 251, 249),
+        gfx::Rgba(226, 229, 233),
+        gfx::Rgba(255, 255, 255),
+        gfx::Rgba(255, 252, 244),
+        gfx::Rgba(224, 214, 193),
+        gfx::Rgba(232, 194, 86),
+        gfx::Rgba(232, 194, 86),
+        gfx::Rgba(244, 210, 115),
+        gfx::Rgba(241, 243, 245),
+        gfx::Rgba(220, 222, 226),
+        gfx::Rgba(255, 255, 255),
+        gfx::Rgba(226, 229, 233),
+        gfx::Rgba(42, 40, 36),
+        gfx::Rgba(89, 84, 77),
+        gfx::Rgba(118, 112, 103),
+        gfx::Rgba(143, 110, 43),
+        gfx::Rgba(185, 118, 59),
+        gfx::Rgba(238, 235, 214),
+        gfx::Rgba(116, 98, 43),
+        gfx::Rgba(219, 234, 218),
+        gfx::Rgba(52, 92, 58),
+        gfx::Rgba(235, 236, 238),
+        gfx::Rgba(86, 84, 80),
+        gfx::Rgba(245, 247, 249),
+        gfx::Rgba(218, 184, 83),
+        gfx::Rgba(232, 194, 86),
+        gfx::Rgba(241, 244, 247),
+        gfx::Rgba(214, 218, 223),
+        gfx::Rgba(52, 50, 46),
+        gfx::Rgba(52, 50, 46),
+        gfx::Rgba(230, 205, 133),
+        gfx::Rgba(255, 243, 207),
+        gfx::Rgba(255, 243, 207),
+        gfx::Rgba(124, 91, 24),
+        gfx::Rgba(124, 91, 24),
+        gfx::Rgba(240, 243, 246),
+        gfx::Rgba(220, 210, 190),
+        gfx::Rgba(52, 50, 46),
+    })));
+}
+
+std::string LocalizePlatformNote(const AppState& state, const std::string& note) {
+    if (!UseEnglish(state) || note.empty()) {
+        return note;
+    }
+
+    if (note == "Biblioteca do emulador não fica visível ao homebrew. Sincronize os títulos para sdmc:/switch/mil_manager/cache/installed-titles-cache.json.") {
+        return "The emulator library is not visible to homebrew. Sync titles to sdmc:/switch/mil_manager/cache/installed-titles-cache.json.";
+    }
+    if (note == "Arquivo installed-titles-cache.json inválido.") {
+        return "Invalid installed-titles-cache.json file.";
+    }
+    if (note == "Arquivo installed-titles-cache.json sem array titles.") {
+        return "installed-titles-cache.json does not contain a titles array.";
+    }
+    if (note == "Títulos importados de installed-titles-cache.json.") {
+        return "Titles imported from installed-titles-cache.json.";
+    }
+    if (note == "nsInitialize falhou. Serviço NS indisponível.") {
+        return "nsInitialize failed. NS service unavailable.";
+    }
+    if (note == "nsListApplicationRecord falhou no modo full.") {
+        return "nsListApplicationRecord failed in full mode.";
+    }
+    if (note == "Títulos instalados carregados por scan completo.") {
+        return "Installed titles loaded using full scan.";
+    }
+    if (note == "Catálogo sem title IDs para sondagem local.") {
+        return "Catalog has no title IDs for local probing.";
+    }
+    if (note == "nsInitialize falhou. Emulador ou serviço NS indisponível.") {
+        return "nsInitialize failed. Emulator or NS service unavailable.";
+    }
+    if (note == "Títulos detectados por sondagem do catálogo.") {
+        return "Titles detected by catalog probing.";
+    }
+    if (note == "Console detectado. Leitura local sempre ativa; ignorando scan_mode=off.") {
+        return "Console detected. Local reading always enabled; ignoring scan_mode=off.";
+    }
+    if (note == "Ambiente não confirmado. Leitura local mantida em modo seguro.") {
+        return "Unconfirmed environment. Local reading kept in safe mode.";
+    }
+    if (note == "Leitura de títulos desativada em settings.ini.") {
+        return "Title reading disabled in settings.ini.";
+    }
+    if (note == "Console detectado. Modo automático usando leitura completa.") {
+        return "Console detected. Auto mode using full scan.";
+    }
+    if (note == "Ambiente não confirmado. Modo automático segue em fallback seguro até detectar console com confiança.") {
+        return "Unconfirmed environment. Auto mode remains in safe fallback until a console is detected with confidence.";
+    }
+    if (note == "Ambiente não confirmado. Leitura local por NS foi bloqueada para evitar crash em emuladores.") {
+        return "Unconfirmed environment. Local NS title reading was blocked to avoid crashes on emulators.";
+    }
+    if (note == "Catálogo indisponível. Sondagem local ignorada.") {
+        return "Catalog unavailable. Local probing skipped.";
+    }
+    if (note == "Leitura local não configurada.") {
+        return "Local reading not configured.";
+    }
+
+    return note;
+}
+
+const char* SortModeLabel(const AppState& state, SortMode mode) {
+    if (!UseEnglish(state)) {
+        switch (mode) {
+            case SortMode::Recent:
+                return "Recentes";
+            case SortMode::Name:
+                return "Nome";
+            case SortMode::Recommended:
+            default:
+                return "Relevância";
+        }
+    }
+
+    switch (mode) {
+        case SortMode::Recent:
+            return "Recent";
+        case SortMode::Name:
+            return "Name";
+        case SortMode::Recommended:
+        default:
+            return "Recommended";
+    }
+}
+
+std::string GetCatalogSourceLabel(const AppState& state) {
+    if (state.activeCatalogSource.empty()) {
+        return UiText(state, "Nenhuma fonte ativa", "No active source");
+    }
+    if (state.activeCatalogSource == kSwitchLocalIndexPath) {
+        return UiText(state, "Catálogo sincronizado do emulador", "Emulator synchronized catalog");
+    }
+    if (state.activeCatalogSource == kCatalogCachePath) {
+        return UiText(state, "Cache local do catálogo", "Local catalog cache");
+    }
+    if (state.activeCatalogSource.rfind("http://", 0) == 0 || state.activeCatalogSource.rfind("https://", 0) == 0) {
+        return UiText(state, "Catálogo online", "Online catalog");
+    }
+    return UiText(state, "Catálogo local", "Local catalog");
+}
+
+std::string SectionLabelLocalized(const AppState& state, ContentSection section) {
+    if (!UseEnglish(state)) {
+        switch (section) {
+            case ContentSection::Translations:
+                return "Traduções & Dublagens";
+            case ContentSection::ModsTools:
+                return "Mods";
+            case ContentSection::Cheats:
+                return "Trapaças";
+            case ContentSection::SaveGames:
+                return "Jogos Salvos";
+            case ContentSection::About:
+            default:
+                return "Sobre a M.I.L.";
+        }
+    }
+
+    switch (section) {
+        case ContentSection::Translations:
+            return "Translations & Dubs";
+        case ContentSection::ModsTools:
+            return "Mods";
+        case ContentSection::Cheats:
+            return "Cheats";
+        case ContentSection::SaveGames:
+            return "Save Games";
+        case ContentSection::About:
+        default:
+            return "About M.I.L.";
+    }
+}
+
+std::string MakeCompatibilitySummaryLocalized(const AppState& state, const CatalogEntry& entry, const InstalledTitle* title) {
+    if (!UseEnglish(state)) {
+        return MakeCompatibilitySummary(entry, title);
+    }
+    const std::string variantSummary = EntryHasVariants(entry) ? VariantListSummary(entry) : std::string();
+    if (!title) {
+        if (!variantSummary.empty()) {
+            return "Game not found on console/emulator. Available variants: " + variantSummary;
+        }
+        return "Game not found on console/emulator.";
+    }
+    if (title->displayVersion.empty()) {
+        if (!variantSummary.empty()) {
+            return "Installed game version unavailable. Available variants: " + variantSummary;
+        }
+        return "Installed game version unavailable.";
+    }
+    if (EntryMatchesInstalledVersion(entry, title)) {
+        return "Compatible with installed version: " + title->displayVersion;
+    }
+
+    std::string message = "Warning: package is outside the supported range for the installed game (" + title->displayVersion + ").";
+    if (!variantSummary.empty()) {
+        message += " Available variants: " + variantSummary + ".";
+    } else {
+        if (!entry.compatibility.minGameVersion.empty()) {
+            message += " Min: " + entry.compatibility.minGameVersion + ".";
+        }
+        if (!entry.compatibility.maxGameVersion.empty()) {
+            message += " Max: " + entry.compatibility.maxGameVersion + ".";
+        }
+        if (!entry.compatibility.exactGameVersions.empty()) {
+            message += " Exact: ";
+            for (std::size_t index = 0; index < entry.compatibility.exactGameVersions.size(); ++index) {
+                if (index > 0) {
+                    message += ", ";
+                }
+                message += entry.compatibility.exactGameVersions[index];
+            }
+            message += '.';
+        }
+    }
+    return message;
+}
+
+std::string MakeCheatAvailabilitySummaryLocalized(const AppState& state,
+                                                  const CatalogEntry& entry,
+                                                  const InstalledTitle* installedTitle) {
+    const CheatTitleRecord* cheatTitle = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
+    if (cheatTitle == nullptr) {
+        return UiText(state,
+                      "Nenhum índice de cheats publicado foi encontrado para este título.",
+                      "No published cheats index was found for this title.");
+    }
+    if (installedTitle == nullptr) {
+        return UiText(state,
+                      "Título não detectado no console/emulador. A instalação vai pedir a escolha manual de um build.",
+                      "Title not detected on the console/emulator. Installation will require choosing a build manually.");
+    }
+    if (installedTitle->buildIdHex.empty()) {
+        return UiText(state,
+                      "Build do jogo não detectado. A instalação vai pedir a escolha manual de um build.",
+                      "Game build not detected. Installation will require choosing a build manually.");
+    }
+    if (const CheatBuildRecord* build = FindCheatBuildRecord(*cheatTitle, installedTitle->buildIdHex)) {
+        const CheatEntryRecord* best = BestCheatEntryForBuild(*build);
+        std::string message = std::string(UiText(state, "Cheat publicado para o build detectado: ", "Cheat published for detected build: ")) +
+                              build->buildId;
+        if (best != nullptr && !best->primarySource.empty()) {
+            message += std::string(" • ") + UiText(state, "Origem: ", "Source: ") +
+                       LocalizedCheatSourceLabel(state, best->primarySource);
+        }
+        return message;
+    }
+    return std::string(UiText(state, "Nenhum cheat publicado para o build detectado: ", "No published cheat for detected build: ")) +
+           installedTitle->buildIdHex;
+}
+
+std::string TruncateText(const std::string& text, std::size_t maxChars) {
+    if (Utf8GlyphCountLocal(text) <= maxChars) {
+        return text;
+    }
+    if (maxChars <= 3) {
+        return text.substr(0, Utf8ByteOffsetForGlyphLocal(text, maxChars));
+    }
+    return text.substr(0, Utf8ByteOffsetForGlyphLocal(text, maxChars - 3)) + "...";
+}
+
+std::string TruncateTextToWidth(const std::string& text, int maxWidth, int scale = 1) {
+    if (text.empty() || maxWidth <= 0) {
+        return {};
+    }
+
+    if (gfx::MeasureTextWidth(text, scale) <= maxWidth) {
+        return text;
+    }
+
+    constexpr const char* kEllipsis = "...";
+    const int ellipsisWidth = gfx::MeasureTextWidth(kEllipsis, scale);
+    if (ellipsisWidth >= maxWidth) {
+        return {};
+    }
+
+    const std::size_t glyphCount = Utf8GlyphCountLocal(text);
+    for (std::size_t glyphs = glyphCount; glyphs > 0; --glyphs) {
+        const std::size_t byteOffset = Utf8ByteOffsetForGlyphLocal(text, glyphs);
+        const std::string candidate = text.substr(0, byteOffset) + kEllipsis;
+        if (gfx::MeasureTextWidth(candidate, scale) <= maxWidth) {
+            return candidate;
+        }
+    }
+
+    return kEllipsis;
+}
+
+std::string TruncateTextToWidthPx(const std::string& text, int maxWidth, int pixelHeight) {
+    if (text.empty() || maxWidth <= 0) {
+        return {};
+    }
+
+    if (gfx::MeasureTextWidthPx(text, pixelHeight) <= maxWidth) {
+        return text;
+    }
+
+    constexpr const char* kEllipsis = "...";
+    const int ellipsisWidth = gfx::MeasureTextWidthPx(kEllipsis, pixelHeight);
+    if (ellipsisWidth >= maxWidth) {
+        return {};
+    }
+
+    const std::size_t glyphCount = Utf8GlyphCountLocal(text);
+    for (std::size_t glyphs = glyphCount; glyphs > 0; --glyphs) {
+        const std::size_t byteOffset = Utf8ByteOffsetForGlyphLocal(text, glyphs);
+        const std::string candidate = text.substr(0, byteOffset) + kEllipsis;
+        if (gfx::MeasureTextWidthPx(candidate, pixelHeight) <= maxWidth) {
+            return candidate;
+        }
+    }
+
+    return kEllipsis;
+}
+
+std::vector<std::string> SplitLines(const std::string& text) {
+    std::vector<std::string> lines;
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t newline = text.find('\n', start);
+        if (newline == std::string::npos) {
+            lines.push_back(text.substr(start));
+            break;
+        }
+        lines.push_back(text.substr(start, newline - start));
+        start = newline + 1;
+    }
+    if (lines.empty()) {
+        lines.push_back({});
+    }
+    return lines;
+}
+
+void DrawPanel(gfx::Canvas& canvas, int x, int y, int width, int height, std::uint32_t fill, std::uint32_t border) {
+    gfx::FillRect(canvas, x, y, width, height, fill);
+    gfx::DrawRect(canvas, x, y, width, height, border);
+}
+
+void FillRoundedRect(gfx::Canvas& canvas, int x, int y, int width, int height, int radius, std::uint32_t color) {
+    if (width <= 0 || height <= 0) {
+        return;
+    }
+
+    const int clampedRadius = std::max(0, std::min(radius, std::min(width, height) / 2));
+    if (clampedRadius == 0) {
+        gfx::FillRect(canvas, x, y, width, height, color);
+        return;
+    }
+
+    gfx::FillRect(canvas, x + clampedRadius, y, width - (clampedRadius * 2), height, color);
+    gfx::FillRect(canvas, x, y + clampedRadius, clampedRadius, height - (clampedRadius * 2), color);
+    gfx::FillRect(canvas, x + width - clampedRadius, y + clampedRadius, clampedRadius, height - (clampedRadius * 2), color);
+    gfx::FillCircle(canvas, x + clampedRadius, y + clampedRadius, clampedRadius, color);
+    gfx::FillCircle(canvas, x + width - clampedRadius - 1, y + clampedRadius, clampedRadius, color);
+    gfx::FillCircle(canvas, x + clampedRadius, y + height - clampedRadius - 1, clampedRadius, color);
+    gfx::FillCircle(canvas, x + width - clampedRadius - 1, y + height - clampedRadius - 1, clampedRadius, color);
+}
+
+std::string SymbolTokenForButtonLabel(const std::string& label) {
+    if (label == "L") {
+        return std::string("\xEE\xA4\x91");
+    }
+    if (label == "R") {
+        return std::string("\xEE\xA4\x92");
+    }
+    if (label == "+") {
+        return "+";
+    }
+    if (label == "A") {
+        return "a";
+    }
+    if (label == "B") {
+        return "b";
+    }
+    if (label == "X") {
+        return "x";
+    }
+    if (label == "Y") {
+        return "y";
+    }
+    return {};
+}
+
+int MeasureSymbolTextWidth(const std::string& text, int scale = 1) {
+    const int width = gfx::MeasureTextWidthFont(text, gfx::FontFace::Symbols, scale);
+    if (width > 0) {
+        return width;
+    }
+    return gfx::MeasureTextWidth(text, scale);
+}
+
+int SymbolLineHeight(int scale = 1) {
+    const int height = gfx::LineHeightFont(gfx::FontFace::Symbols, scale);
+    if (height > 0) {
+        return height;
+    }
+    return gfx::LineHeight(scale);
+}
+
+void DrawSymbolText(gfx::Canvas& canvas, int x, int y, const std::string& text, std::uint32_t color, int scale = 1) {
+    if (gfx::MeasureTextWidthFont(text, gfx::FontFace::Symbols, scale) > 0) {
+        gfx::DrawTextFont(canvas, x, y, text, color, gfx::FontFace::Symbols, scale);
+        return;
+    }
+    gfx::DrawText(canvas, x, y, text, color, scale);
+}
+
+void DrawBulletSeparator(gfx::Canvas& canvas, int x, int y, std::uint32_t color) {
+    gfx::FillCircle(canvas, x, y, 3, color);
+}
+
+void DrawTextWithBulletSeparator(gfx::Canvas& canvas,
+                                 int x,
+                                 int y,
+                                 const std::string& left,
+                                 const std::string& right,
+                                 std::uint32_t textColor,
+                                 int scale = 1) {
+    gfx::DrawText(canvas, x, y, left, textColor, scale);
+    const int leftWidth = gfx::MeasureTextWidth(left, scale);
+    const std::string bullet = u8"\u2022";
+    const int bulletX = x + leftWidth + 8;
+    gfx::DrawText(canvas, bulletX, y, bullet, textColor, scale);
+    gfx::DrawText(canvas, bulletX + gfx::MeasureTextWidth(bullet, scale) + 8, y, right, textColor, scale);
+}
+
+void DrawBadge(gfx::Canvas& canvas,
+               int x,
+               int y,
+               int width,
+               int height,
+               const std::string& label,
+                std::uint32_t outer,
+                std::uint32_t inner,
+                std::uint32_t textColor,
+                int textYOffset = 0) {
+    const std::string symbolToken = SymbolTokenForButtonLabel(label);
+    if (!symbolToken.empty()) {
+        const int symbolWidth = MeasureSymbolTextWidth(symbolToken, 1);
+        const int symbolHeight = SymbolLineHeight(1);
+        if (symbolWidth > 0 && symbolHeight > 0) {
+            const int symbolX = x + (width - symbolWidth) / 2;
+            const int symbolY = y + std::max(0, (height - symbolHeight) / 2) + 1;
+            DrawSymbolText(canvas, symbolX, symbolY, symbolToken, textColor, 1);
+            return;
+        }
+    }
+
+    const int radius = 7;
+    FillRoundedRect(canvas, x, y, width, height, radius, outer);
+    FillRoundedRect(canvas, x + 2, y + 2, width - 4, height - 4, std::max(2, radius - 1), inner);
+
+    const int textWidth = gfx::MeasureTextWidth(label, 1);
+    const int textX = x + (width - textWidth) / 2;
+    const int textY = y + std::max(0, (height - gfx::LineHeight(1)) / 2) + 2 + textYOffset;
+    gfx::DrawText(canvas, textX, textY, label, textColor, 1);
+    gfx::DrawText(canvas, textX + 1, textY, label, textColor, 1);
+}
+
+constexpr int kMenuTextPx = 20;
+constexpr int kBodyTextPx = 18;
+constexpr int kActionTextPx = 14;
+constexpr int kStatusTextPx = 14;
+
+int CenterTextY(int y, int height, int scale = 1) {
+    return y + std::max(0, (height - gfx::LineHeight(scale)) / 2);
+}
+
+int CenterTextYPx(int y, int height, int pixelHeight) {
+    return y + std::max(0, (height - gfx::LineHeightPx(pixelHeight)) / 2);
+}
+
+void DrawChip(gfx::Canvas& canvas, int x, int y, const std::string& text, std::uint32_t fill, std::uint32_t textColor) {
+    const int width = gfx::MeasureTextWidth(text, 1) + 18;
+    DrawPanel(canvas, x, y, width, 24, fill, fill);
+    gfx::DrawText(canvas, x + 9, CenterTextY(y, 24, 1), text, textColor, 1);
+}
+
+int MeasureChipWidth(const std::string& text) {
+    return gfx::MeasureTextWidth(text, 1) + 18;
+}
+
+void DrawChipRow(gfx::Canvas& canvas,
+                 int x,
+                 int y,
+                 int maxRight,
+                 const std::vector<std::tuple<std::string, std::uint32_t, std::uint32_t>>& chips) {
+    int chipX = x;
+    for (const auto& chip : chips) {
+        const std::string& label = std::get<0>(chip);
+        if (label.empty()) {
+            continue;
+        }
+        const int chipWidth = MeasureChipWidth(label);
+        if (chipX + chipWidth > maxRight && chipX > x) {
+            break;
+        }
+        DrawChip(canvas, chipX, y, label, std::get<1>(chip), std::get<2>(chip));
+        chipX += chipWidth + 8;
+    }
+}
+
+std::vector<std::string> SplitLinesNormalized(std::string text) {
+    std::vector<std::string> lines;
+    std::size_t pos = 0;
+    while ((pos = text.find("\r\n", pos)) != std::string::npos) {
+        text.replace(pos, 2, "\n");
+    }
+    std::replace(text.begin(), text.end(), '\r', '\n');
+
+    std::size_t start = 0;
+    while (start <= text.size()) {
+        const std::size_t end = text.find('\n', start);
+        const std::string line = Trim(text.substr(start, end == std::string::npos ? std::string::npos : end - start));
+        if (!line.empty()) {
+            lines.push_back(line);
+        }
+        if (end == std::string::npos) {
+            break;
+        }
+        start = end + 1;
+    }
+
+    if (lines.empty()) {
+        const std::string trimmed = Trim(text);
+        if (!trimmed.empty()) {
+            lines.push_back(trimmed);
+        }
+    }
+
+    return lines;
+}
+
+void DrawButton(gfx::Canvas& canvas,
+                const ThemePalette& palette,
+                int x,
+                int y,
+                int width,
+                int height,
+                const std::string& text,
+                bool primary,
+                bool active = false,
+                bool borderless = false) {
+    const std::uint32_t fill = borderless ? palette.entryFill : (primary ? palette.buttonPrimaryFill : palette.buttonSecondaryFill);
+    const std::uint32_t border = borderless
+                                     ? fill
+                                     : (active ? palette.buttonPrimaryBorderActive
+                                               : (primary ? palette.buttonPrimaryBorder : palette.buttonSecondaryBorder));
+    const std::uint32_t textColor = borderless ? palette.primaryText : (primary ? palette.buttonTextPrimary : palette.buttonTextSecondary);
+    DrawPanel(canvas, x, y, width, height, fill, border);
+
+    const bool hasBadge = text.size() > 3 && text[1] == ' ' && text[2] == ' ';
+    if (hasBadge) {
+        const std::string badgeLabel(1, text[0]);
+        const std::string buttonText = text.substr(3);
+        const std::uint32_t badgeOuter = palette.buttonBadgeOuter;
+        const std::uint32_t badgeInner = primary ? palette.buttonBadgeInnerPrimary : palette.buttonBadgeInnerSecondary;
+        const std::uint32_t badgeText = primary ? palette.buttonBadgeTextPrimary : palette.buttonBadgeTextSecondary;
+        DrawBadge(canvas, x + 12, y + 6, 34, 32, badgeLabel, badgeOuter, badgeInner, badgeText, badgeLabel == "A" ? 4 : 0);
+
+        const int textWidth = gfx::MeasureTextWidth(buttonText, 1);
+        const int contentWidth = 36 + 12 + textWidth;
+        const int textX = x + std::max(60, (width - contentWidth) / 2 + 46);
+        const int textY = CenterTextY(y, height, 1);
+        gfx::DrawText(canvas, textX, textY, buttonText, textColor, 1);
+        gfx::DrawText(canvas, textX + 1, textY, buttonText, textColor, 1);
+        return;
+    }
+
+    const int textWidth = gfx::MeasureTextWidth(text, 1);
+    gfx::DrawText(canvas, x + std::max(10, (width - textWidth) / 2), CenterTextY(y, height, 1), text, textColor, 1);
+}
+
+void DrawConfirmButton(gfx::Canvas& canvas,
+                       const ThemePalette& palette,
+                       bool darkTheme,
+                       int x,
+                       int y,
+                       int width,
+                       int height,
+                       const std::string& badgeLabel,
+                       const std::string& text,
+                       bool primary,
+                       bool active = false) {
+    const std::uint32_t fill = primary ? palette.buttonPrimaryFill : palette.buttonSecondaryFill;
+    const std::uint32_t border = active ? palette.buttonPrimaryBorderActive
+                                        : (primary ? palette.buttonPrimaryBorder : palette.buttonSecondaryBorder);
+    const std::uint32_t textColor = primary ? palette.buttonTextPrimary : palette.buttonTextSecondary;
+    DrawPanel(canvas, x, y, width, height, fill, border);
+
+    const std::uint32_t badgeOuter = palette.buttonBadgeOuter;
+    const std::uint32_t badgeInner = primary ? palette.buttonBadgeInnerPrimary : palette.buttonBadgeInnerSecondary;
+    const std::uint32_t badgeText = darkTheme ? gfx::Rgba(255, 255, 255) : gfx::Rgba(45, 45, 45);
+    DrawBadge(canvas, x + 12, y + 6, 34, 32, badgeLabel, badgeOuter, badgeInner, badgeText, badgeLabel == "A" ? 4 : 0);
+
+    const int textWidth = gfx::MeasureTextWidth(text, 1);
+    const int contentWidth = 36 + 12 + textWidth;
+    const int textX = x + std::max(60, (width - contentWidth) / 2 + 46);
+    const int textY = CenterTextY(y, height, 1);
+    gfx::DrawText(canvas, textX, textY, text, textColor, 1);
+    gfx::DrawText(canvas, textX + 1, textY, text, textColor, 1);
+}
+
+void DrawSidebarActionCard(gfx::Canvas& canvas,
+                           const ThemePalette& palette,
+                           int x,
+                           int y,
+                           int width,
+                           int height,
+                           const std::string& buttonLabel,
+                           const std::string& text,
+                           bool highlighted = false,
+                           bool active = false,
+                           bool disabled = false) {
+    const std::uint32_t fill = palette.entryFill;
+    const std::uint32_t border = fill;
+    const std::uint32_t outer = disabled ? palette.secondaryText : (active ? palette.actionBadgeOuterActive : palette.actionBadgeOuter);
+    const std::uint32_t inner = disabled ? palette.entryFill : palette.actionBadgeInner;
+    const std::uint32_t badgeText = disabled ? palette.mutedText : palette.actionBadgeText;
+    DrawPanel(canvas, x, y, width, height, fill, border);
+
+    DrawBadge(canvas, x + 10, y + 4, 28, 26, buttonLabel, outer, inner, badgeText);
+
+    const int textX = x + 40;
+    const int textY = CenterTextYPx(y, height, kActionTextPx) + 1;
+    const std::uint32_t textColor = disabled ? palette.mutedText : palette.primaryText;
+    const std::string truncated = TruncateTextToWidthPx(text, width - 42, kActionTextPx);
+    gfx::DrawTextPx(canvas, textX, textY, truncated, textColor, kActionTextPx);
+    gfx::DrawTextPx(canvas, textX + 1, textY, truncated, textColor, kActionTextPx);
+}
+
+void DrawSidebarStatusCard(gfx::Canvas& canvas,
+                           const ThemePalette& palette,
+                           int x,
+                           int y,
+                           int width,
+                           int height,
+                           const std::string& text) {
+    DrawPanel(canvas, x, y, width, height, palette.statusFill, palette.statusBorder);
+    const std::string truncated = TruncateTextToWidthPx(text, width - 18, kStatusTextPx);
+    const int textWidth = gfx::MeasureTextWidthPx(truncated, kStatusTextPx);
+    const int textX = x + std::max(10, (width - textWidth) / 2);
+    gfx::DrawTextPx(canvas, textX, CenterTextYPx(y, height, kStatusTextPx) + 1, truncated, palette.statusText, kStatusTextPx);
+}
+
+void DrawSidebar(gfx::Canvas& canvas,
+                 const AppState& state,
+                 const std::vector<const CatalogEntry*>& items,
+                 int x,
+                 int y,
+                 int width,
+                 int height) {
+    const ThemePalette palette = GetThemePalette(state);
+    const bool focused = state.focus == AppState::FocusPane::Sections;
+    const std::uint32_t focusedFill = UseDarkTheme(state) ? gfx::Rgba(23, 23, 23) : gfx::Rgba(230, 230, 230);
+    DrawPanel(canvas,
+              x,
+              y,
+              width,
+              height,
+              focused ? focusedFill : palette.sidebarFill,
+              focused ? palette.sidebarBorderFocused : palette.sidebarBorder);
+
+    gfx::FillRect(canvas, x, y, width, 84, palette.sidebarHeaderFill);
+    gfx::DrawRect(canvas, x, y, width, 84, palette.sidebarBorder);
+    gfx::DrawText(canvas,
+                  x + 20,
+                  y + 16,
+                  UiText(state, "Gerenciador M.I.L.", "M.I.L. Manager"),
+                  palette.headerText,
+                  2);
+    gfx::DrawText(canvas,
+                  x + 21,
+                  y + 16,
+                  UiText(state, "Gerenciador M.I.L.", "M.I.L. Manager"),
+                  palette.headerText,
+                  2);
+
+    const std::vector<ContentSection> sections = {
+        ContentSection::Translations,
+        ContentSection::ModsTools,
+        ContentSection::Cheats,
+        ContentSection::SaveGames,
+        ContentSection::About,
+    };
+
+    const bool hasSelectionAction = state.section != ContentSection::About && !items.empty();
+    const bool selectionInstalled =
+        hasSelectionAction && FindReceiptForPackage(state.receipts, items[std::min(state.selection, items.size() - 1)]->id, nullptr);
+    int itemY = y + 104;
+    for (ContentSection section : sections) {
+        const bool selected = state.section == section;
+        const std::uint32_t fill = selected ? palette.sidebarItemFillSelected : palette.entryFill;
+        const std::uint32_t border = fill;
+        DrawPanel(canvas, x + 16, itemY, width - 32, 52, fill, border);
+        gfx::DrawTextWrappedPx(canvas,
+                               x + 30,
+                               CenterTextYPx(itemY, 52, kMenuTextPx),
+                               width - 60,
+                               TruncateText(SectionLabelLocalized(state, section), 24),
+                               selected ? palette.sidebarItemTextSelected : palette.sidebarItemText,
+                               kMenuTextPx,
+                               1);
+        itemY += 62;
+    }
+    DrawSidebarActionCard(canvas,
+                          palette,
+                          kInstallButtonX,
+                          kInstallButtonY,
+                          kSidebarCardWidth,
+                          kSidebarActionCardHeight,
+                          "A",
+                          selectionInstalled ? UiText(state, "Remover", "Remove") : UiText(state, "Instalar", "Install"),
+                          false,
+                          state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::ActionButton);
+    DrawSidebarActionCard(canvas,
+                          palette,
+                          kExitButtonX,
+                          kExitButtonY,
+                          kSidebarCardWidth,
+                          kSidebarActionCardHeight,
+                          "+",
+                          UiText(state, "Pesquisar", "Search"),
+                          false,
+                          state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::SearchButton);
+    DrawSidebarActionCard(canvas,
+                          palette,
+                          kRefreshButtonX,
+                          kRefreshButtonY,
+                          kSidebarCardWidth,
+                          kSidebarActionCardHeight,
+                          "X",
+                          UiText(state, "Atualizar", "Refresh"),
+                          false,
+                          state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::RefreshButton);
+    DrawSidebarActionCard(canvas,
+                          palette,
+                          kSortButtonX,
+                          kSortButtonY,
+                          kSidebarCardWidth,
+                          kSidebarActionCardHeight,
+                          "Y",
+                          UiText(state, "Ordenar", "Sort"),
+                          false,
+                          state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::SortButton);
+    DrawSidebarActionCard(canvas,
+                          palette,
+                          kLanguageButtonX,
+                          kLanguageButtonY,
+                          kSidebarCardWidth,
+                          kSidebarActionCardHeight,
+                          "L",
+                          UiText(state, "Idioma", "Language"),
+                          false,
+                          state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::LanguageButton);
+    DrawSidebarActionCard(canvas,
+                          palette,
+                          kThemeButtonX,
+                          kThemeButtonY,
+                          kSidebarCardWidth,
+                          kSidebarActionCardHeight,
+                          "R",
+                          UiText(state, "Tema", "Theme"),
+                          false,
+                          state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::ThemeButton);
+    DrawSidebarStatusCard(canvas,
+                          palette,
+                          kSidebarInfoX,
+                          kSidebarStatusCardY,
+                          kSidebarCardWidth,
+                          kSidebarStatusCardHeight,
+                          (UseEnglish(state) ? "Games " : "Jogos ") + std::to_string(state.installedTitles.size()));
+    DrawSidebarStatusCard(canvas,
+                          palette,
+                          kSidebarInfoX + kSidebarCardWidth + kSidebarCardGap,
+                          kSidebarStatusCardY,
+                          kSidebarCardWidth,
+                          kSidebarStatusCardHeight,
+                          (UseEnglish(state) ? "Packages " : "Pacotes ") + std::to_string(state.receipts.size()));
+}
+
+void DrawEmptyState(gfx::Canvas& canvas, const AppState& state, int x, int y, int width, int height) {
+    const ThemePalette palette = GetThemePalette(state);
+    DrawPanel(canvas, x, y, width, height, palette.emptyFill, palette.emptyBorder);
+    gfx::DrawText(canvas, x + 22, y + 22, UiText(state, u8"Nenhum item", "No items"), palette.primaryText, 2);
+    gfx::DrawTextWrapped(canvas,
+                         x + 22,
+                         y + 62,
+                         width - 44,
+                         UiText(state,
+                                "Ainda não há conteúdo disponível para esta seção no catálogo atual.",
+                                "There is no content available for this section in the current catalog."),
+                         palette.mutedText,
+                         1,
+                         4);
+}
+
+void DrawCheatsEmptyState(gfx::Canvas& canvas, const AppState& state, int x, int y, int width, int height) {
+    const ThemePalette palette = GetThemePalette(state);
+    DrawPanel(canvas, x, y, width, height, palette.emptyFill, palette.emptyBorder);
+    gfx::DrawText(canvas, x + 22, y + 24, UiText(state, u8"Nenhum item", "No items"), palette.primaryText, 2);
+    gfx::DrawTextWrapped(canvas,
+                         x + 22,
+                         y + 68,
+                         width - 44,
+                         UiText(state,
+                                u8"Títulos não identificados. Utilize a Pesquisa para localizar a trapaça desejada.",
+                                "Titles not identified. Use Search to find the desired cheats."),
+                         palette.mutedText,
+                         1,
+                         4);
+}
+
+void DrawEntryList(gfx::Canvas& canvas,
+                   const AppState& state,
+                   const std::vector<const CatalogEntry*>& items,
+                   int x,
+                   int y,
+                   int width,
+                   int height) {
+    const ThemePalette palette = GetThemePalette(state);
+    const bool focused = state.focus == AppState::FocusPane::Catalog;
+    const std::uint32_t focusedFill = UseDarkTheme(state) ? gfx::Rgba(23, 23, 23) : gfx::Rgba(230, 230, 230);
+    DrawPanel(canvas,
+              x,
+              y,
+              width,
+              height,
+              focused ? focusedFill : palette.contentPanelFill,
+              focused ? palette.contentPanelBorderFocused : palette.contentPanelBorder);
+    gfx::FillRect(canvas, x, y, width, 84, palette.contentHeaderFill);
+    gfx::DrawRect(canvas, x, y, width, 84, palette.contentPanelBorder);
+    gfx::DrawText(canvas, x + 20, y + 16, SectionLabelLocalized(state, state.section), palette.headerText, 2);
+    gfx::DrawText(canvas, x + 21, y + 16, SectionLabelLocalized(state, state.section), palette.headerText, 2);
+    DrawTextWithBulletSeparator(canvas,
+                                x + 20,
+                                y + 52,
+                                std::string(UiText(state, "Fonte: ", "Source: ")) + GetCatalogSourceLabel(state),
+                                std::string(UiText(state, "Ordem: ", "Sort: ")) + SortModeLabel(state, state.sortMode),
+                                palette.headerMetaText,
+                                1);
+
+    if (items.empty()) {
+        if (state.section == ContentSection::Cheats) {
+            DrawCheatsEmptyState(canvas, state, x + 18, y + 96, width - 36, height - 114);
+        } else {
+            DrawEmptyState(canvas, state, x + 18, y + 96, width - 36, height - 114);
+        }
+        return;
+    }
+
+    const std::size_t clampedSelection = std::min(state.selection, items.size() - 1);
+    const auto window = GetVisibleEntryWindow(items.size(), clampedSelection, height);
+    const std::size_t windowStart = window.first;
+    const std::size_t windowEnd = window.second;
+    int cardY = y + kEntryListTopOffset;
+
+    for (std::size_t index = windowStart; index < windowEnd; ++index) {
+        const CatalogEntry& entry = *items[index];
+        const bool selected = index == clampedSelection;
+        const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
+        const bool suggested = EntryIsSuggested(state, entry);
+        const bool installed = FindReceiptForPackage(state.receipts, entry.id, nullptr);
+
+        const std::uint32_t fill = selected ? palette.entryFillSelected : palette.entryFill;
+        const std::uint32_t border = selected ? palette.entryBorderSelected : palette.entryBorder;
+        DrawPanel(canvas, x + 18, cardY, width - 36, kEntryCardHeight, fill, border);
+        const std::uint32_t accentColor =
+            selected ? (UseDarkTheme(state) ? palette.sidebarItemFill : palette.entryAccentSelected) : palette.entryAccent;
+        gfx::FillRect(canvas,
+                      x + 18,
+                      cardY,
+                      8,
+                      kEntryCardHeight,
+                      accentColor);
+
+        const std::string thumbnailPath = PreferredThumbnailPathForEntry(state, entry);
+        const bool showProofCover = !thumbnailPath.empty();
+        const int coverWidth = 110;
+        const int coverHeight = 110;
+        const int coverX = x + width - coverWidth - 23;
+        const int coverY = cardY + 4;
+        const int textRightPadding = showProofCover ? 6 : 26;
+        const int textMaxWidth = (showProofCover ? coverX : (x + width - 18)) - (x + 38) - textRightPadding;
+
+        if (showProofCover) {
+            gfx::DrawImageFile(canvas, coverX, coverY, coverWidth, coverHeight, thumbnailPath);
+        }
+
+        const std::uint32_t titleColor = selected ? palette.sidebarItemTextSelected : palette.primaryText;
+        const std::uint32_t secondaryColor = selected ? palette.sidebarItemTextSelected : palette.secondaryText;
+        gfx::DrawText(canvas,
+                      x + 38,
+                      cardY + 10,
+                      TruncateTextToWidth(entry.name, textMaxWidth, 1),
+                      titleColor,
+                      1);
+
+        const std::string contentTypesText =
+            (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry))
+                ? CheatCardSubtitle(state, entry, installedTitle)
+                : JoinLabels(EntryContentTypeLabels(state, entry), ", ");
+        if (!contentTypesText.empty()) {
+            gfx::DrawText(canvas,
+                          x + 38,
+                          cardY + 40,
+                          TruncateTextToWidth(contentTypesText, textMaxWidth, 1),
+                          secondaryColor,
+                          1);
+        }
+
+        std::vector<std::tuple<std::string, std::uint32_t, std::uint32_t>> statusChips;
+        if (suggested) {
+            statusChips.emplace_back(UseEnglish(state) ? "Suggested" : "Sugerido", palette.chipSuggestedFill, palette.chipSuggestedText);
+        }
+        statusChips.emplace_back(installed ? UiText(state, "Instalado", "Installed") : UiText(state, "Não Instalado", "Not Installed"),
+                                 installed ? palette.chipInstalledFill : palette.chipNeutralFill,
+                                 installed ? palette.chipInstalledText : palette.chipNeutralText);
+        const std::string versionLabel = EntryVersionStatusLabel(state, entry, installedTitle);
+        bool versionKnown = installedTitle != nullptr && !installedTitle->displayVersion.empty();
+        bool versionMatches = versionKnown && EntryMatchesInstalledVersion(entry, installedTitle);
+        if (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry)) {
+            versionKnown = installedTitle != nullptr && !installedTitle->buildIdHex.empty();
+            versionMatches = false;
+            if (versionKnown) {
+                const CheatTitleRecord* cheatTitle = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
+                versionMatches = cheatTitle != nullptr &&
+                                 FindCheatBuildRecord(*cheatTitle, installedTitle->buildIdHex) != nullptr;
+            }
+        }
+        statusChips.emplace_back(versionLabel,
+                                 versionKnown ? (versionMatches ? palette.chipInstalledFill : palette.chipSuggestedFill)
+                                              : palette.chipNeutralFill,
+                                 versionKnown ? (versionMatches ? palette.chipInstalledText : palette.chipSuggestedText)
+                                              : palette.chipNeutralText);
+        DrawChipRow(canvas, x + 38, cardY + 72, x + 38 + textMaxWidth, statusChips);
+        cardY += kEntryCardHeight + kEntryCardGap;
+    }
+}
+
+void DrawDetails(gfx::Canvas& canvas,
+                 const AppState& state,
+                 const std::vector<const CatalogEntry*>& items,
+                 int x,
+                 int y,
+                 int width,
+                 int height) {
+    const ThemePalette palette = GetThemePalette(state);
+    DrawPanel(canvas, x, y, width, height, palette.detailsFill, palette.detailsBorder);
+
+    if (state.section == ContentSection::About) {
+        gfx::FillRect(canvas, x, y, width, 84, palette.contentHeaderFill);
+        gfx::DrawRect(canvas, x, y, width, 84, palette.detailsBorder);
+        gfx::DrawText(canvas, x + 20, y + 16, UiText(state, "Sobre a M.I.L.", "About M.I.L."), palette.headerText, 2);
+        gfx::DrawText(canvas, x + 21, y + 16, UiText(state, "Sobre a M.I.L.", "About M.I.L."), palette.headerText, 2);
+        gfx::DrawTextWrapped(canvas,
+                             x + 20,
+                             y + 96,
+                             width - 40,
+                             UiText(state,
+                                    "Gerenciador dedicado a traduções, dublagens, mods, cheats e saves para Switch real e Ryujinx.",
+                                    "Manager dedicated to translations, dubs, mods, cheats and saves for both real Switch and Ryujinx."),
+                             palette.secondaryText,
+                             1,
+                             8);
+        gfx::DrawTextWrapped(canvas,
+                             x + 20,
+                             y + 180,
+                             width - 40,
+                             std::string(UiText(state, "Fonte ativa: ", "Active source: ")) + GetCatalogSourceLabel(state),
+                             palette.accentText,
+                             1,
+                             3);
+        gfx::DrawTextWrapped(canvas,
+                             x + 20,
+                             y + 242,
+                             width - 40,
+                             std::string(UiText(state, "Ambiente: ", "Environment: ")) +
+                                 RuntimeEnvironmentLabel(GetRuntimeEnvironment()),
+                             palette.accentText,
+                             1,
+                             2);
+        gfx::DrawTextWrapped(canvas,
+                             x + 20,
+                             y + 284,
+                             width - 40,
+                             std::string(UiText(state, "Loader info: ", "Loader info: ")) +
+                                 TruncateText(GetLoaderInfoSummary(), 42),
+                             palette.accentText,
+                             1,
+                             3);
+        return;
+    }
+
+    if (items.empty()) {
+        gfx::DrawTextWrapped(canvas,
+                             x + 20,
+                             y + 120,
+                             width - 40,
+                             UiText(state,
+                                    "Carregue um catálogo ou troque de seção para ver os detalhes do pacote selecionado.",
+                                    "Load a catalog or change section to view package details."),
+                             palette.secondaryText,
+                             1,
+                             6);
+        return;
+    }
+
+    const CatalogEntry& entry = *items[std::min(state.selection, items.size() - 1)];
+    const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
+    const std::string localizedIntro = LocalizedEntryIntro(state, entry);
+    const std::string localizedSummary = LocalizedEntrySummary(state, entry);
+    const int infoStep = gfx::LineHeight(1) + 1;
+    gfx::FillRect(canvas, x, y, width, 84, palette.contentHeaderFill);
+    gfx::DrawRect(canvas, x, y, width, 84, palette.detailsBorder);
+    gfx::DrawTextWrapped(canvas, x + 20, y + 16, width - 40, entry.name, palette.headerText, 2, 2);
+    gfx::DrawTextWrapped(canvas, x + 21, y + 16, width - 40, entry.name, palette.headerText, 2, 2);
+
+    int cursorY = y + 114;
+    if (!localizedIntro.empty()) {
+        const int introHeight = gfx::DrawTextWrapped(canvas, x + 20, cursorY, width - 40, localizedIntro, palette.primaryText, 1, 4);
+        gfx::DrawTextWrapped(canvas, x + 21, cursorY, width - 40, localizedIntro, palette.primaryText, 1, 4);
+        cursorY += introHeight;
+        cursorY += gfx::LineHeight(1);
+    }
+
+    if (!localizedSummary.empty()) {
+        cursorY += gfx::DrawTextWrapped(canvas, x + 20, cursorY, width - 40, localizedSummary, palette.primaryText, 1, 6);
+        cursorY += gfx::LineHeight(1) + 2;
+    }
+
+    gfx::DrawText(canvas, x + 20, cursorY, std::string(UiText(state, "Pacote: ", "Package: ")) + entry.id, palette.secondaryText, 1);
+    cursorY += infoStep;
+    gfx::DrawText(canvas, x + 20, cursorY, std::string(UiText(state, "ID Título: ", "Title ID: ")) + entry.titleId, palette.secondaryText, 1);
+    cursorY += infoStep;
+    if (EntryHasVariants(entry)) {
+        cursorY += gfx::DrawTextWrapped(canvas,
+                                        x + 20,
+                                        cursorY,
+                                        width - 40,
+                                        std::string(UiText(state, "Variantes: ", "Variants: ")) + VariantListSummary(entry),
+                                        palette.secondaryText,
+                                        1,
+                                        3,
+                                        2);
+    }
+
+    if (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry)) {
+        const CheatTitleRecord* cheatTitle = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
+        if (cheatTitle != nullptr) {
+            const std::vector<std::string> categories = CollectCheatCategoriesLocalized(state, *cheatTitle);
+            if (!categories.empty()) {
+                cursorY += gfx::DrawTextWrapped(canvas,
+                                                x + 20,
+                                                cursorY,
+                                                width - 40,
+                                                std::string(UiText(state, "Categorias: ", "Categories: ")) +
+                                                    SummarizeLabelList(categories, 3),
+                                                palette.secondaryText,
+                                                1,
+                                                3);
+            }
+
+            const std::vector<std::string> sources = CollectCheatSourcesLocalized(state, *cheatTitle);
+            if (!sources.empty()) {
+                cursorY += gfx::DrawTextWrapped(canvas,
+                                                x + 20,
+                                                cursorY,
+                                                width - 40,
+                                                std::string(UiText(state, "Origens: ", "Sources: ")) +
+                                                    SummarizeLabelList(sources, 3),
+                                                palette.secondaryText,
+                                                1,
+                                                3);
+            }
+
+            gfx::DrawText(canvas,
+                          x + 20,
+                          cursorY,
+                          std::string(UiText(state, "Builds publicados: ", "Published builds: ")) +
+                              std::to_string(cheatTitle->builds.size()),
+                          palette.secondaryText,
+                          1);
+            cursorY += infoStep;
+
+            gfx::DrawText(canvas,
+                          x + 20,
+                          cursorY,
+                          std::string(UiText(state, "Build detectado: ", "Detected build: ")) +
+                              ((installedTitle != nullptr && !installedTitle->buildIdHex.empty())
+                                   ? installedTitle->buildIdHex
+                                   : UiText(state, "não disponível", "unavailable")),
+                          palette.secondaryText,
+                          1);
+            cursorY += infoStep;
+
+            InstallReceipt cheatReceipt;
+            if (FindReceiptForPackage(state.receipts, entry.id, &cheatReceipt)) {
+                const std::string installedBuild = InstalledCheatBuildId(cheatReceipt);
+                if (!installedBuild.empty()) {
+                    gfx::DrawText(canvas,
+                                  x + 20,
+                                  cursorY,
+                                  std::string(UiText(state, "Build instalado: ", "Installed build: ")) + installedBuild,
+                                  palette.secondaryText,
+                                  1);
+                    cursorY += infoStep;
+                }
+            }
+        }
+    }
+
+    if (!entry.author.empty()) {
+        gfx::DrawText(canvas, x + 20, cursorY, UiText(state, "Autoria:", "Credits:"), palette.secondaryText, 1);
+        cursorY += infoStep;
+        cursorY += gfx::DrawTextWrapped(canvas, x + 20, cursorY, width - 40, entry.author, palette.secondaryText, 1, 6);
+    }
+
+    if (installedTitle && !installedTitle->displayVersion.empty()) {
+        gfx::DrawText(canvas,
+                      x + 20,
+                      cursorY,
+                      std::string(UiText(state, "Versão do jogo: ", "Game version: ")) + installedTitle->displayVersion,
+                      palette.secondaryText,
+                      1);
+        cursorY += infoStep;
+    }
+    if (!entry.packageVersion.empty()) {
+        gfx::DrawText(canvas,
+                      x + 20,
+                      cursorY,
+                      std::string(UiText(state, "Versão do pacote: ", "Package version: ")) + entry.packageVersion,
+                      palette.secondaryText,
+                      1);
+        cursorY += infoStep;
+    }
+
+    if (!entry.contentRevision.empty()) {
+        gfx::DrawText(canvas,
+                      x + 20,
+                      cursorY,
+                      std::string(UiText(state, "Última atualização: ", "Last update: ")) + entry.contentRevision,
+                      palette.secondaryText,
+                      1);
+        cursorY += infoStep;
+    }
+
+    const std::string footerSummary =
+        (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry))
+            ? MakeCheatAvailabilitySummaryLocalized(state, entry, installedTitle)
+            : MakeCompatibilitySummaryLocalized(state, entry, installedTitle);
+    cursorY += gfx::LineHeight(1) + 4;
+    cursorY += gfx::DrawTextWrapped(canvas,
+                                    x + 20,
+                                    cursorY,
+                                    width - 40,
+                                    footerSummary,
+                                    palette.warningText,
+                                    1,
+                                    6);
+}
+
+void DrawInstallConfirmationDialog(gfx::Canvas& canvas, const AppState& state) {
+    if (!state.installConfirmVisible) {
+        return;
+    }
+
+    const ThemePalette palette = GetThemePalette(state);
+    const bool darkTheme = UseDarkTheme(state);
+    const int dialogWidth = kInstallConfirmDialogWidth;
+    const int dialogHeight = kInstallConfirmDialogHeight;
+    const int dialogX = InstallConfirmDialogX(canvas);
+    const int dialogY = InstallConfirmDialogY(canvas);
+    const int buttonWidth = (dialogWidth - 48) / 2;
+    const int leftButtonX = dialogX + 18;
+    const int rightButtonX = dialogX + dialogWidth - 18 - buttonWidth;
+    const int buttonY = dialogY + dialogHeight - 68;
+
+    DrawPanel(canvas, dialogX, dialogY, dialogWidth, dialogHeight, palette.detailsFill, palette.detailsBorder);
+    gfx::FillRect(canvas, dialogX, dialogY, dialogWidth, 52, palette.contentHeaderFill);
+    gfx::DrawRect(canvas, dialogX, dialogY, dialogWidth, 52, palette.detailsBorder);
+    gfx::DrawText(canvas, dialogX + 18, dialogY + 14, state.installConfirmTitle, palette.headerText, 2);
+    gfx::DrawText(canvas, dialogX + 19, dialogY + 14, state.installConfirmTitle, palette.headerText, 2);
+
+    gfx::DrawTextWrapped(canvas,
+                         dialogX + 18,
+                         dialogY + 72,
+                         dialogWidth - 36,
+                         state.installConfirmMessage,
+                         palette.primaryText,
+                         1,
+                         4);
+
+    DrawConfirmButton(canvas,
+                      palette,
+                      darkTheme,
+                      leftButtonX,
+                      buttonY,
+                      buttonWidth,
+                      40,
+                      "A",
+                      UiText(state, "Sim", "Yes"),
+                      true,
+                      state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::ConfirmYesButton);
+    DrawConfirmButton(canvas,
+                      palette,
+                      darkTheme,
+                      rightButtonX,
+                      buttonY,
+                      buttonWidth,
+                      40,
+                      "B",
+                      UiText(state, "Não", "No"),
+                      false,
+                      state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::ConfirmNoButton);
+}
+
+void DrawVariantSelectionDialog(gfx::Canvas& canvas, const AppState& state) {
+    if (!state.variantSelectVisible) {
+        return;
+    }
+
+    const CatalogEntry* entry = FindCatalogEntryById(state.catalog, state.variantSelectEntryId);
+    if (entry == nullptr) {
+        return;
+    }
+
+    const ThemePalette palette = GetThemePalette(state);
+    const bool darkTheme = UseDarkTheme(state);
+    const int dialogWidth = kVariantSelectDialogWidth;
+    const int dialogHeight = VariantSelectDialogHeight(state);
+    const int dialogX = VariantSelectDialogX(canvas);
+    const int dialogY = VariantSelectDialogY(canvas, state);
+    const int rowStartY = dialogY + 86;
+    const int buttonWidth = (dialogWidth - 48) / 2;
+    const int leftButtonX = dialogX + 18;
+    const int rightButtonX = dialogX + dialogWidth - 18 - buttonWidth;
+    const int buttonY = dialogY + dialogHeight - 56;
+
+    DrawPanel(canvas, dialogX, dialogY, dialogWidth, dialogHeight, palette.detailsFill, palette.detailsBorder);
+    gfx::FillRect(canvas, dialogX, dialogY, dialogWidth, 52, palette.contentHeaderFill);
+    gfx::DrawRect(canvas, dialogX, dialogY, dialogWidth, 52, palette.detailsBorder);
+    gfx::DrawText(canvas, dialogX + 18, dialogY + 14, state.variantSelectTitle, palette.headerText, 2);
+    gfx::DrawText(canvas, dialogX + 19, dialogY + 14, state.variantSelectTitle, palette.headerText, 2);
+    gfx::DrawTextWrapped(canvas,
+                         dialogX + 18,
+                         dialogY + 62,
+                         dialogWidth - 36,
+                         state.variantSelectMessage,
+                         palette.primaryText,
+                         1,
+                         3);
+
+    for (std::size_t index = 0; index < state.variantSelectIds.size(); ++index) {
+        const CatalogVariant* variant = FindVariantById(*entry, state.variantSelectIds[index]);
+        if (variant == nullptr) {
+            continue;
+        }
+        const int rowY = rowStartY + static_cast<int>(index) * (kVariantSelectRowHeight + kVariantSelectRowGap);
+        const bool selected = index == std::min(state.variantSelectSelection, state.variantSelectIds.size() - 1);
+        const bool pressed = state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::VariantOption &&
+                             state.activeTouchTarget.index == static_cast<int>(index);
+        const std::uint32_t fill = selected ? palette.entryFillSelected : palette.entryFill;
+        const std::uint32_t border = selected ? palette.entryBorderSelected : palette.entryBorder;
+        const std::uint32_t textColor = selected ? palette.sidebarItemTextSelected : palette.primaryText;
+        DrawPanel(canvas, dialogX + 18, rowY, dialogWidth - 36, kVariantSelectRowHeight, fill, border);
+        if (pressed) {
+            gfx::FillRect(canvas, dialogX + 20, rowY + 2, dialogWidth - 40, kVariantSelectRowHeight - 4, gfx::Rgba(255, 255, 255, 24));
+        }
+        const std::string label = VariantDisplayLabel(*variant);
+        const std::string versionText = CompatibilityRuleLabel(variant->compatibility);
+        gfx::DrawText(canvas, dialogX + 28, rowY + 8, TruncateTextToWidth(label, dialogWidth - 56, 1), textColor, 1);
+        if (!versionText.empty()) {
+            gfx::DrawText(canvas,
+                          dialogX + dialogWidth - 28 - gfx::MeasureTextWidth(versionText, 1),
+                          rowY + 8,
+                          versionText,
+                          selected ? palette.sidebarItemTextSelected : palette.secondaryText,
+                          1);
+        }
+    }
+
+    DrawConfirmButton(canvas,
+                      palette,
+                      darkTheme,
+                      leftButtonX,
+                      buttonY,
+                      buttonWidth,
+                      kVariantSelectButtonsHeight,
+                      "A",
+                      UiText(state, "Instalar", "Install"),
+                      true,
+                      state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::VariantConfirmButton);
+    DrawConfirmButton(canvas,
+                      palette,
+                      darkTheme,
+                      rightButtonX,
+                      buttonY,
+                      buttonWidth,
+                      kVariantSelectButtonsHeight,
+                      "B",
+                      UiText(state, "Cancelar", "Cancel"),
+                      false,
+                      state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::VariantCancelButton);
+}
+
+void DrawCheatBuildSelectionDialog(gfx::Canvas& canvas, const AppState& state) {
+    if (!state.cheatBuildSelectVisible) {
+        return;
+    }
+
+    const CatalogEntry* entry = FindCheatBuildEntryForPopup(state);
+    (void)entry;
+    const CheatTitleRecord* title = FindCheatTitleRecord(state.cheatsIndex, state.cheatBuildTitleId);
+
+    const ThemePalette palette = GetThemePalette(state);
+    const bool darkTheme = UseDarkTheme(state);
+    const int dialogWidth = kCheatBuildDialogWidth;
+    const int dialogHeight = CheatBuildDialogHeight(state);
+    const int dialogX = CheatBuildDialogX(canvas);
+    const int dialogY = CheatBuildDialogY(canvas, state);
+    const int rowStartY = dialogY + CheatBuildDialogRowStartOffset(state);
+    const int buttonWidth = (dialogWidth - 48) / 2;
+    const int leftButtonX = dialogX + 18;
+    const int rightButtonX = dialogX + dialogWidth - 18 - buttonWidth;
+    const int buttonY = rowStartY + CheatBuildDialogRowsHeight(state) + 14;
+
+    DrawPanel(canvas, dialogX, dialogY, dialogWidth, dialogHeight, palette.detailsFill, palette.detailsBorder);
+    gfx::FillRect(canvas, dialogX, dialogY, dialogWidth, 52, palette.contentHeaderFill);
+    gfx::DrawRect(canvas, dialogX, dialogY, dialogWidth, 52, palette.detailsBorder);
+    gfx::DrawText(canvas, dialogX + 18, dialogY + 14, state.cheatBuildTitle, palette.headerText, 2);
+    gfx::DrawText(canvas, dialogX + 19, dialogY + 14, state.cheatBuildTitle, palette.headerText, 2);
+    gfx::DrawTextWrapped(canvas,
+                         dialogX + 18,
+                         dialogY + 62,
+                         dialogWidth - 36,
+                         state.cheatBuildMessage,
+                         palette.primaryText,
+                         1,
+                         3);
+
+    const auto [windowStart, windowEnd] = GetCheatBuildVisibleWindow(state);
+    for (std::size_t index = windowStart; index < windowEnd; ++index) {
+        const CheatBuildRecord* build = title != nullptr ? FindCheatBuildRecord(*title, state.cheatBuildIds[index]) : nullptr;
+        const int rowIndex = static_cast<int>(index - windowStart);
+        const int rowY = rowStartY + rowIndex * (kCheatBuildRowHeight + kCheatBuildRowGap);
+        const bool selected = index == std::min(state.cheatBuildSelection, state.cheatBuildIds.size() - 1);
+        const bool pressed = state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::CheatBuildOption &&
+                             state.activeTouchTarget.index == static_cast<int>(index);
+        const std::uint32_t fill = selected ? palette.entryFillSelected : palette.entryFill;
+        const std::uint32_t border = selected ? palette.entryBorderSelected : palette.entryBorder;
+        const std::uint32_t textColor = selected ? palette.sidebarItemTextSelected : palette.primaryText;
+        DrawPanel(canvas, dialogX + 18, rowY, dialogWidth - 36, kCheatBuildRowHeight, fill, border);
+        if (pressed) {
+            gfx::FillRect(canvas, dialogX + 20, rowY + 2, dialogWidth - 40, kCheatBuildRowHeight - 4, gfx::Rgba(255, 255, 255, 24));
+        }
+        const std::string label = build != nullptr ? CheatBuildLabel(*build) : state.cheatBuildIds[index];
+        gfx::DrawText(canvas, dialogX + 28, rowY + 8, TruncateTextToWidth(label, dialogWidth - 56, 1), textColor, 1);
+    }
+
+    if (windowStart > 0) {
+        gfx::DrawText(canvas, dialogX + dialogWidth - 34, rowStartY - 18, "^", palette.secondaryText, 1);
+    }
+    if (windowEnd < state.cheatBuildIds.size()) {
+        const int indicatorY =
+            rowStartY + static_cast<int>(windowEnd - windowStart) * (kCheatBuildRowHeight + kCheatBuildRowGap) - 8;
+        gfx::DrawText(canvas, dialogX + dialogWidth - 34, indicatorY, "v", palette.secondaryText, 1);
+    }
+
+    DrawConfirmButton(canvas,
+                      palette,
+                      darkTheme,
+                      leftButtonX,
+                      buttonY,
+                      buttonWidth,
+                      kCheatBuildButtonsHeight,
+                      "A",
+                      UiText(state, "Instalar", "Install"),
+                      true,
+                      state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::CheatBuildConfirmButton);
+    DrawConfirmButton(canvas,
+                      palette,
+                      darkTheme,
+                      rightButtonX,
+                      buttonY,
+                      buttonWidth,
+                      kCheatBuildButtonsHeight,
+                      "B",
+                      UiText(state, "Cancelar", "Cancel"),
+                      false,
+                      state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::CheatBuildCancelButton);
+}
+
+void DrawProgressOverlay(gfx::Canvas& canvas, const AppState& state) {
+    if (!state.progressVisible) {
+        return;
+    }
+
+    const ThemePalette palette = GetThemePalette(state);
+    const int dialogWidth = 420;
+    const int dialogHeight = 118;
+    const int dialogX = (canvas.width - dialogWidth) / 2;
+    const int dialogY = canvas.height - dialogHeight - 44;
+    const int barX = dialogX + 18;
+    const int barY = dialogY + 78;
+    const int barWidth = dialogWidth - 36;
+    const int barHeight = 16;
+    const int fillWidth = std::max(0, std::min(barWidth, (barWidth * state.progressPercent) / 100));
+
+    DrawPanel(canvas, dialogX, dialogY, dialogWidth, dialogHeight, palette.detailsFill, palette.detailsBorder);
+    gfx::DrawText(canvas, dialogX + 18, dialogY + 16, state.progressTitle, palette.primaryText, 2);
+    gfx::DrawTextWrapped(canvas, dialogX + 18, dialogY + 48, dialogWidth - 36, state.progressDetail, palette.secondaryText, 1, 4);
+    gfx::FillRect(canvas, barX, barY, barWidth, barHeight, palette.buttonSecondaryFill);
+    gfx::DrawRect(canvas, barX, barY, barWidth, barHeight, palette.buttonSecondaryBorder);
+    if (fillWidth > 0) {
+        gfx::FillRect(canvas, barX + 1, barY + 1, std::max(1, fillWidth - 2), barHeight - 2, palette.buttonPrimaryFill);
+    }
+    const std::string percentText = std::to_string(state.progressPercent) + "%";
+    gfx::DrawText(canvas,
+                  barX + barWidth - 8 - gfx::MeasureTextWidth(percentText, 1),
+                  dialogY + 52,
+                  percentText,
+                  palette.mutedText,
+                  1);
+}
+
+void RenderUi(PlatformSession& session, const AppState& state, const std::vector<const CatalogEntry*>& items) {
+    if (!session.framebufferReady) {
+        return;
+    }
+
+    const ThemePalette palette = GetThemePalette(state);
+    gfx::Canvas canvas = gfx::BeginFrame(session.framebuffer);
+    if (!canvas.pixels) {
+        return;
+    }
+
+    gfx::ClearVerticalGradient(canvas, palette.windowTop, palette.windowBottom);
+    gfx::FillRect(canvas, 0, 0, canvas.width, canvas.height, palette.windowBase);
+
+    DrawSidebar(canvas, state, items, 24, 28, 270, 664);
+    DrawEntryList(canvas, state, items, kEntryListX, kEntryListY, kEntryListWidth, kEntryListHeight);
+    DrawDetails(canvas, state, items, kDetailsX, kDetailsY, kDetailsWidth, kDetailsHeight);
+
+    const std::string localizedPlatformNote = LocalizePlatformNote(state, state.platformNote);
+    std::string footerStatus = NormalizeFooterStatus(state.statusLine);
+    if (!localizedPlatformNote.empty()) {
+        if (!footerStatus.empty()) {
+            footerStatus += u8" • ";
+        }
+        footerStatus += NormalizeFooterStatus(localizedPlatformNote);
+    }
+
+    DrawPanel(canvas, 316, kFooterY, 940, kFooterHeight, palette.footerFill, palette.footerBorder);
+    gfx::DrawTextPx(canvas,
+                    328,
+                    CenterTextYPx(kFooterY, kFooterHeight, kActionTextPx),
+                    TruncateTextToWidthPx(footerStatus, 916, kActionTextPx),
+                    palette.footerText,
+                    kActionTextPx);
+
+    DrawInstallConfirmationDialog(canvas, state);
+    DrawVariantSelectionDialog(canvas, state);
+    DrawCheatBuildSelectionDialog(canvas, state);
+    DrawProgressOverlay(canvas, state);
+
+    gfx::EndFrame(session.framebuffer);
+}
+
+void RenderAbout(const AppState& state) {
+    PrintLine(UiText(state, "Objetivo", "Purpose"));
+    PrintLine(UiText(state,
+                     "Aplicativo homebrew para listar e instalar traduções, mods, cheats e saves.",
+                     "Homebrew app to list and install translations, mods, cheats and save games."));
+    PrintLine("");
+    PrintLine(UiText(state, "Arquitetura atual", "Current architecture"));
+    PrintLine(UiText(state, "- Catálogo remoto em JSON com cache local automático", "- Remote JSON catalog with automatic local cache"));
+    PrintLine(UiText(state,
+                     "- Instalação por ZIP em sdmc:/atmosphere/contents/ para mods, traduções e cheats",
+                     "- ZIP installation to sdmc:/atmosphere/contents/ for mods, translations and cheats"));
+    PrintLine(UiText(state, "- Compatibilidade console + emulador por degradação de serviços", "- Console + emulator compatibility with service fallback"));
+    PrintLine(UiText(state, "- Configuração em sdmc:/switch/mil_manager/settings.ini", "- Configuration in sdmc:/switch/mil_manager/settings.ini"));
+    PrintLine("");
+    PrintLine(UiText(state, "Diretórios", "Directories"));
+    PrintLine(UiText(state, "- Cache: sdmc:/switch/mil_manager/cache", "- Cache: sdmc:/switch/mil_manager/cache"));
+    PrintLine(UiText(state, "- Cache do índice: sdmc:/switch/mil_manager/cache/index.json", "- Catalog cache: sdmc:/switch/mil_manager/cache/index.json"));
+    PrintLine(UiText(state, "- Recibos: sdmc:/switch/mil_manager/receipts", "- Receipts: sdmc:/switch/mil_manager/receipts"));
+    PrintLine(UiText(state,
+                     "- Conteúdo instalado: sdmc:/atmosphere/contents/ (saves continuam em sdmc:/)",
+                     "- Installed content: sdmc:/atmosphere/contents/ (saves remain in sdmc:/)"));
+    if (IsEmulatorEnvironment()) {
+        PrintLine(UiText(state,
+                         "- Importação do emulador: sdmc:/switch/mil_manager/cache/installed-titles-cache.json",
+                         "- Emulator import: sdmc:/switch/mil_manager/cache/installed-titles-cache.json"));
+    }
+    PrintLine("");
+    PrintLine(UiText(state, "Ambiente detectado", "Detected environment"));
+    PrintLine(RuntimeEnvironmentLabel(GetRuntimeEnvironment()));
+    PrintLine(std::string(UiText(state, "Loader info: ", "Loader info: ")) + GetLoaderInfoSummary());
+    PrintLine("");
+    PrintLine(UiText(state, "Fonte ativa do catálogo", "Active catalog source"));
+    PrintLine(GetCatalogSourceLabel(state));
+    if (!state.catalog.catalogName.empty() || !state.catalog.catalogRevision.empty() || !state.catalog.channel.empty()) {
+        PrintLine("");
+        PrintLine(UiText(state, "Metadados do catálogo", "Catalog metadata"));
+        if (!state.catalog.catalogName.empty()) {
+            PrintLine(std::string(UiText(state, "Nome: ", "Name: ")) + state.catalog.catalogName);
+        }
+        if (!state.catalog.catalogRevision.empty()) {
+            PrintLine(std::string(UiText(state, "Revisão: ", "Revision: ")) + state.catalog.catalogRevision);
+        }
+        if (!state.catalog.channel.empty()) {
+            PrintLine(std::string(UiText(state, "Canal: ", "Channel: ")) + state.catalog.channel);
+        }
+        if (!state.catalog.generatedAt.empty()) {
+            PrintLine(std::string(UiText(state, "Gerado em: ", "Generated at: ")) + state.catalog.generatedAt);
+        }
+        if (!state.catalog.schemaVersion.empty()) {
+            PrintLine("Schema: " + state.catalog.schemaVersion);
+        }
+    }
+}
+
+void RenderEntries(const AppState& state, const std::vector<const CatalogEntry*>& items) {
+    if (items.empty()) {
+        PrintLine(UiText(state, "Nenhum item disponível nesta seção.", "No items available in this section."));
+        return;
+    }
+
+    const std::size_t clampedSelection = std::min(state.selection, items.size() - 1);
+    const std::size_t windowStart = clampedSelection > 4 ? clampedSelection - 4 : 0;
+    const std::size_t windowEnd = std::min(items.size(), windowStart + 10);
+
+    PrintLine(UiText(state, "Lista", "List"));
+    for (std::size_t index = windowStart; index < windowEnd; ++index) {
+        const CatalogEntry& entry = *items[index];
+        const bool selected = index == clampedSelection;
+        const bool suggested = EntryIsSuggested(state, entry);
+        const bool installed = FindReceiptForPackage(state.receipts, entry.id, nullptr);
+
+        std::string prefix = selected ? "> " : "  ";
+        std::string line = prefix + entry.name;
+        if (suggested) {
+            line += UseEnglish(state) ? " [SUGGESTED]" : " [SUGERIDO]";
+        }
+        if (installed) {
+            line += UseEnglish(state) ? " [INSTALLED]" : " [INSTALADO]";
+        }
+        PrintLine(line);
+    }
+
+    const CatalogEntry& selectedEntry = *items[clampedSelection];
+    const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, selectedEntry.titleId);
+
+    PrintLine("");
+    PrintLine(UiText(state, "Detalhes", "Details"));
+    if (!selectedEntry.intro.empty()) {
+        PrintLine(selectedEntry.intro);
+        PrintLine("");
+    }
+    PrintLine(std::string(UiText(state, "Pacote: ", "Package: ")) + selectedEntry.id +
+              std::string(UseEnglish(state) ? " • Revision: " : " • Revisão: ") + selectedEntry.contentRevision);
+    PrintLine(std::string(UiText(state, "Jogo: ", "Game: ")) + selectedEntry.titleId +
+              (installedTitle ? UiText(state, " • Instalado localmente", " • Installed locally")
+                              : UiText(state, " • Não instalado", " • Not installed")));
+    if (!selectedEntry.packageVersion.empty()) {
+        PrintLine(std::string(UiText(state, "Versão do pacote: ", "Package version: ")) + selectedEntry.packageVersion);
+    }
+    if (installedTitle != nullptr && !installedTitle->displayVersion.empty()) {
+        PrintLine(std::string(UiText(state, "Versão do jogo: ", "Game version: ")) + installedTitle->displayVersion);
+    }
+    if (!selectedEntry.summary.empty()) {
+        PrintLine(selectedEntry.summary);
+    }
+    PrintLine(MakeCompatibilitySummaryLocalized(state, selectedEntry, installedTitle));
+}
+
+void Render(const AppState& state) {
+    consoleClear();
+
+    PrintLine(UiText(state, "Gerenciador MIL", "MIL Manager"));
+    PrintLine(std::string(UiText(state, "Seção: ", "Section: ")) + SectionLabelLocalized(state, state.section) +
+              std::string(UseEnglish(state) ? " • Installed games: " : " • Jogos instalados: ") + std::to_string(state.installedTitles.size()) +
+              std::string(UseEnglish(state) ? " • Installed packages: " : " • Pacotes instalados: ") + std::to_string(state.receipts.size()));
+    PrintLine(std::string(UiText(state, "Idioma: ", "Language: ")) + std::string(LanguageModeLabel(state.config.language)) +
+              std::string(UseEnglish(state) ? " • Theme: " : " • Tema: ") + ThemeModeLabelLocalized(state, state.config.theme) +
+              " • Scan: " + std::string(InstalledTitleScanModeLabel(state.config.scanMode)));
+    PrintLine(std::string(UiText(state, "Fonte: ", "Source: ")) + GetCatalogSourceLabel(state));
+    PrintLine(state.statusLine);
+    if (!state.platformNote.empty()) {
+        PrintLine(LocalizePlatformNote(state, state.platformNote));
+    }
+    PrintLine("");
+
+    if (state.section == ContentSection::About) {
+        RenderAbout(state);
+    } else {
+        RenderEntries(state, BuildVisibleEntries(state));
+    }
+
+    PrintLine("");
+    PrintLine(UiText(state, "Controles", "Controls"));
+    PrintLine(UiText(state,
+                     "LEFT/RIGHT muda foco • UP/DOWN navega • Y ordena • X atualiza",
+                     "LEFT/RIGHT change focus • UP/DOWN navigate • Y sort • X refresh"));
+    PrintLine(UiText(state,
+                     "A instala/remove • L alterna idioma • R alterna tema • + pesquisa • - sai",
+                     "A install/remove • L switch language • R switch theme • + search • - exit"));
+}
+
+void ReloadLocalState(AppState& state) {
+    std::string configNote;
+    state.config = LoadAppConfig(configNote);
+    state.platformNote = configNote;
+
+    std::string receiptsNote;
+    state.receipts = LoadInstallReceipts(receiptsNote);
+}
+
+void RefreshInstalledTitles(AppState& state) {
+    if (GetRuntimeEnvironment() == RuntimeEnvironment::Unknown &&
+        GetLoaderInfoSummary() == "(empty)" &&
+        !FileHasContent(kInstalledTitlesCachePath)) {
+        state.installedTitles.clear();
+        state.platformNote = "Loader info vazio. Leitura local por NS foi bloqueada em modo seguro.";
+        return;
+    }
+
+    std::string titlesNote;
+    state.installedTitles = LoadInstalledTitles(state.config, &state.catalog, titlesNote);
+    if (!titlesNote.empty()) {
+        state.platformNote = titlesNote;
+    }
+}
+
+void CycleLanguage(AppState& state) {
+    switch (state.config.language) {
+        case LanguageMode::PtBr:
+            state.config.language = LanguageMode::EnUs;
+            break;
+        case LanguageMode::EnUs:
+        default:
+            state.config.language = LanguageMode::PtBr;
+            break;
+    }
+
+    std::string saveError;
+    if (SaveAppConfig(state.config, saveError)) {
+        state.statusLine = UseEnglish(state) ? "Language saved to settings.ini" : "Idioma salvo em settings.ini";
+    } else {
+        state.statusLine = saveError;
+    }
+}
+
+void CycleTheme(AppState& state) {
+    state.config.theme = state.config.theme == ThemeMode::Dark ? ThemeMode::Light : ThemeMode::Dark;
+
+    std::string saveError;
+    if (SaveAppConfig(state.config, saveError)) {
+        state.statusLine = std::string(UiText(state, "Tema alterado para ", "Theme changed to ")) +
+                           ThemeModeLabelLocalized(state, state.config.theme);
+    } else {
+        state.statusLine = saveError;
+    }
+}
+
+void CycleSortMode(AppState& state) {
+    switch (state.sortMode) {
+        case SortMode::Recommended:
+            state.sortMode = SortMode::Recent;
+            break;
+        case SortMode::Recent:
+            state.sortMode = SortMode::Name;
+            break;
+        case SortMode::Name:
+        default:
+            state.sortMode = SortMode::Recommended;
+            break;
+    }
+
+    state.selection = 0;
+    state.statusLine = std::string(UiText(state, "Ordenação: ", "Sort mode: ")) + SortModeLabel(state, state.sortMode);
+}
+
+void HandleSelectionAction(AppState& state) {
+    if (state.section == ContentSection::About) {
+        return;
+    }
+
+    const auto items = BuildVisibleEntries(state);
+    if (items.empty()) {
+        return;
+    }
+
+    const CatalogEntry& entry = *items[std::min(state.selection, items.size() - 1)];
+    InstallReceipt receipt;
+    if (FindReceiptForPackage(state.receipts, entry.id, &receipt)) {
+        std::string error;
+        if (UninstallPackage(receipt, error)) {
+            state.statusLine = std::string(UseEnglish(state) ? "Package removed: " : "Pacote removido: ") + entry.name;
+            std::string note;
+            state.receipts = LoadInstallReceipts(note);
+        } else {
+            state.statusLine = error;
+        }
+        return;
+    }
+
+    const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
+    std::string confirmTitle;
+    std::string confirmMessage;
+    if (ShouldConfirmInstall(state, entry, installedTitle, confirmTitle, confirmMessage)) {
+        ShowInstallConfirmation(state, entry, confirmTitle, confirmMessage);
+        return;
+    }
+
+    if (entry.section == ContentSection::Cheats) {
+        BeginCheatIndexInstall(state, entry, installedTitle, false);
+        return;
+    }
+
+    BeginVariantAwareInstall(state, entry, installedTitle, false);
+}
+
+void ConfirmPendingInstall(AppState& state) {
+    const CatalogEntry* entry = FindVisibleEntryById(state, state.installConfirmEntryId);
+    if (entry == nullptr) {
+        ClearInstallConfirmation(state);
+        state.statusLine = UiText(state, "Entrada não encontrada para instalação.", "Entry not found for installation.");
+        return;
+    }
+
+    ClearInstallConfirmation(state);
+    const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry->titleId);
+    if (entry->section == ContentSection::Cheats) {
+        BeginCheatIndexInstall(state, *entry, installedTitle, true);
+        return;
+    }
+    BeginVariantAwareInstall(state, *entry, installedTitle, true);
+}
+
+void ConfirmSelectedVariantInstall(AppState& state) {
+    const CatalogEntry* entry = FindCatalogEntryById(state.catalog, state.variantSelectEntryId);
+    if (entry == nullptr) {
+        ClearVariantSelection(state);
+        state.statusLine = UiText(state, "Entrada não encontrada para instalação.", "Entry not found for installation.");
+        return;
+    }
+
+    const CatalogVariant* variant = SelectedVariantForPopup(state, *entry);
+    ClearVariantSelection(state);
+    if (variant == nullptr) {
+        state.statusLine = UiText(state, "Nenhuma variante selecionada.", "No variant selected.");
+        return;
+    }
+
+    InstallResolvedEntry(state, *entry, variant);
+}
+
+void ConfirmSelectedCheatBuildInstall(AppState& state) {
+    const CatalogEntry* entry = FindCheatBuildEntryForPopup(state);
+    if (entry == nullptr) {
+        ClearCheatBuildSelection(state);
+        state.statusLine = UiText(state, "Entrada não encontrada para instalação.", "Entry not found for installation.");
+        return;
+    }
+
+    const CheatBuildRecord* build = SelectedCheatBuildForPopup(state, state.cheatsIndex, *entry);
+    ClearCheatBuildSelection(state);
+    if (build == nullptr) {
+        state.statusLine = UiText(state, "Nenhum build de cheat selecionado.", "No cheat build selected.");
+        return;
+    }
+
+    InstallCheatBuild(state, *entry, *build);
+}
+
+void PreviewTouchTarget(AppState& state, const TouchTarget& target) {
+    const std::vector<ContentSection> sections = {
+        ContentSection::Translations,
+        ContentSection::ModsTools,
+        ContentSection::Cheats,
+        ContentSection::SaveGames,
+        ContentSection::About,
+    };
+
+    switch (target.kind) {
+        case TouchTargetKind::Section:
+            if (target.index >= 0 && static_cast<std::size_t>(target.index) < sections.size()) {
+                state.focus = AppState::FocusPane::Sections;
+                state.section = sections[static_cast<std::size_t>(target.index)];
+                state.selection = 0;
+                EnsureCheatsIndexReady(state, false);
+            }
+            break;
+        case TouchTargetKind::Entry:
+            if (target.index >= 0) {
+                state.focus = AppState::FocusPane::Catalog;
+                state.selection = static_cast<std::size_t>(target.index);
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+void ActivateTouchTarget(AppState& state, const TouchTarget& target) {
+    switch (target.kind) {
+        case TouchTargetKind::SortButton:
+            CycleSortMode(state);
+            break;
+        case TouchTargetKind::LanguageButton:
+            CycleLanguage(state);
+            break;
+        case TouchTargetKind::ThemeButton:
+            CycleTheme(state);
+            break;
+        case TouchTargetKind::SearchButton:
+            OpenSearchDialog(state);
+            break;
+        case TouchTargetKind::RefreshButton: {
+            SetProgress(state,
+                        UiText(state, u8"Atualizando", "Refreshing"),
+                        UiText(state, u8"Recarregando dados locais...", "Reloading local data..."),
+                        10);
+            ReloadLocalState(state);
+            const bool allowNetworkRefresh = !IsRyujinxGuestEnvironment();
+            SetProgress(state,
+                        UiText(state, u8"Atualizando", "Refreshing"),
+                        UiText(state,
+                               allowNetworkRefresh ? u8"Verificando catálogo e cache..." : u8"Usando cache local do catálogo...",
+                               allowNetworkRefresh ? "Checking catalog and cache..." : "Using local catalog cache..."),
+                        35);
+            if (LoadCatalog(state, false, allowNetworkRefresh, allowNetworkRefresh, allowNetworkRefresh)) {
+                SetProgress(state,
+                            UiText(state, u8"Atualizando", "Refreshing"),
+                            UiText(state, u8"Lendo títulos instalados...", "Reading installed titles..."),
+                            60);
+                RefreshInstalledTitles(state);
+                if (state.section == ContentSection::Cheats) {
+                    SetProgress(state,
+                                UiText(state, u8"Atualizando", "Refreshing"),
+                                UiText(state,
+                                       allowNetworkRefresh ? u8"Atualizando índice de trapaças..." : u8"Usando índice local de trapaças...",
+                                       allowNetworkRefresh ? "Updating cheats index..." : "Using local cheats index..."),
+                                82);
+                    EnsureCheatsIndexReady(state, allowNetworkRefresh, allowNetworkRefresh);
+                }
+                state.statusLine = UseEnglish(state) ? "Catalog and title scan updated."
+                                                     : "Catálogo e leitura de títulos atualizados.";
+            }
+            SetProgress(state, UiText(state, u8"Atualizando", "Refreshing"), UiText(state, u8"Concluído.", "Done."), 100);
+            ClearProgress(state);
+            break;
+        }
+        case TouchTargetKind::ActionButton:
+            HandleSelectionAction(state);
+            if (!state.installConfirmVisible && !state.variantSelectVisible && !state.cheatBuildSelectVisible) {
+                ReloadLocalState(state);
+                RefreshInstalledTitles(state);
+                if (state.section == ContentSection::Cheats) {
+                    EnsureCheatsIndexReady(state, !IsRyujinxGuestEnvironment());
+                }
+            }
+            break;
+        default:
+            break;
+    }
+}
+
+}  // namespace
+
+int RunApplication() {
+    padConfigureInput(1, HidNpadStyleSet_NpadStandard);
+
+    PadState pad;
+    padInitializeDefault(&pad);
+
+    PlatformSession session;
+    AppState state;
+    state.activeSession = &session;
+
+    std::string platformInitNote;
+    InitializePlatform(session, platformInitNote);
+    state.platformNote = platformInitNote;
+    state.thumbnailWorkerEnabled = false;
+
+    ReloadLocalState(state);
+    if (LoadCatalog(state, true)) {
+        RefreshInstalledTitles(state);
+        state.statusLine = UseEnglish(state) ? "Ready. Catalog and local title state loaded."
+                                             : "Pronto. Catálogo e estado local dos títulos carregados.";
+    } else {
+        RefreshInstalledTitles(state);
+    }
+
+    const std::vector<ContentSection> sections = {
+        ContentSection::Translations,
+        ContentSection::ModsTools,
+        ContentSection::Cheats,
+        ContentSection::SaveGames,
+        ContentSection::About,
+    };
+
+    while (appletMainLoop()) {
+        ++state.frameCounter;
+        padUpdate(&pad);
+        const u64 buttonsDown = padGetButtonsDown(&pad);
+
+        std::size_t currentSectionIndex = std::find(sections.begin(), sections.end(), state.section) - sections.begin();
+        auto visibleEntries = BuildVisibleEntries(state);
+        PrefetchVisibleThumbnail(state, visibleEntries);
+
+        if (state.installConfirmVisible) {
+            HidTouchScreenState modalTouchState {};
+            const size_t modalTouchStates = hidGetTouchScreenStates(&modalTouchState, 1);
+            const bool modalIsTouching = modalTouchStates > 0 && modalTouchState.count > 0;
+            if (modalIsTouching) {
+                state.lastTouchX = static_cast<int>(modalTouchState.touches[0].x);
+                state.lastTouchY = static_cast<int>(modalTouchState.touches[0].y);
+                const TouchTarget currentTouchTarget =
+                    HitTestTouchTarget(state, visibleEntries, state.lastTouchX, state.lastTouchY);
+                state.touchActive = true;
+                state.activeTouchTarget = currentTouchTarget;
+            } else if (state.touchActive) {
+                const TouchTarget releasedTarget = HitTestTouchTarget(state, visibleEntries, state.lastTouchX, state.lastTouchY);
+                if (SameTouchTarget(state.activeTouchTarget, releasedTarget)) {
+                    if (releasedTarget.kind == TouchTargetKind::ConfirmYesButton) {
+                        ConfirmPendingInstall(state);
+                        if (!state.installConfirmVisible && !state.variantSelectVisible && !state.cheatBuildSelectVisible) {
+                            ReloadLocalState(state);
+                            RefreshInstalledTitles(state);
+                        }
+                    } else if (releasedTarget.kind == TouchTargetKind::ConfirmNoButton) {
+                        ClearInstallConfirmation(state);
+                        state.statusLine = UiText(state, "Instalação cancelada.", "Installation cancelled.");
+                    }
+                }
+                state.touchActive = false;
+                state.activeTouchTarget = {};
+            }
+            if (buttonsDown & HidNpadButton_A) {
+                ConfirmPendingInstall(state);
+                if (!state.installConfirmVisible && !state.variantSelectVisible && !state.cheatBuildSelectVisible) {
+                    ReloadLocalState(state);
+                    RefreshInstalledTitles(state);
+                }
+            } else if (buttonsDown & HidNpadButton_B) {
+                ClearInstallConfirmation(state);
+                state.statusLine = UiText(state, "Instalação cancelada.", "Installation cancelled.");
+            }
+
+            visibleEntries = BuildVisibleEntries(state);
+            RenderUi(session, state, visibleEntries);
+            continue;
+        }
+
+        if (state.variantSelectVisible) {
+            HidTouchScreenState modalTouchState {};
+            const size_t modalTouchStates = hidGetTouchScreenStates(&modalTouchState, 1);
+            const bool modalIsTouching = modalTouchStates > 0 && modalTouchState.count > 0;
+            if (modalIsTouching) {
+                state.lastTouchX = static_cast<int>(modalTouchState.touches[0].x);
+                state.lastTouchY = static_cast<int>(modalTouchState.touches[0].y);
+                const TouchTarget currentTouchTarget =
+                    HitTestTouchTarget(state, visibleEntries, state.lastTouchX, state.lastTouchY);
+                if (currentTouchTarget.kind == TouchTargetKind::VariantOption && currentTouchTarget.index >= 0) {
+                    state.variantSelectSelection = static_cast<std::size_t>(currentTouchTarget.index);
+                }
+                state.touchActive = true;
+                state.activeTouchTarget = currentTouchTarget;
+            } else if (state.touchActive) {
+                const TouchTarget releasedTarget = HitTestTouchTarget(state, visibleEntries, state.lastTouchX, state.lastTouchY);
+                if (SameTouchTarget(state.activeTouchTarget, releasedTarget)) {
+                    if (releasedTarget.kind == TouchTargetKind::VariantOption && releasedTarget.index >= 0) {
+                        state.variantSelectSelection = static_cast<std::size_t>(releasedTarget.index);
+                    } else if (releasedTarget.kind == TouchTargetKind::VariantConfirmButton) {
+                        ConfirmSelectedVariantInstall(state);
+                        ReloadLocalState(state);
+                        RefreshInstalledTitles(state);
+                    } else if (releasedTarget.kind == TouchTargetKind::VariantCancelButton) {
+                        ClearVariantSelection(state);
+                        state.statusLine = UiText(state, "Instalação cancelada.", "Installation cancelled.");
+                    }
+                }
+                state.touchActive = false;
+                state.activeTouchTarget = {};
+            }
+
+            if (buttonsDown & HidNpadButton_Down) {
+                if (!state.variantSelectIds.empty()) {
+                    state.variantSelectSelection = std::min(state.variantSelectSelection + 1, state.variantSelectIds.size() - 1);
+                }
+            }
+            if (buttonsDown & HidNpadButton_Up) {
+                if (state.variantSelectSelection > 0) {
+                    state.variantSelectSelection -= 1;
+                }
+            }
+            if (buttonsDown & HidNpadButton_A) {
+                ConfirmSelectedVariantInstall(state);
+                ReloadLocalState(state);
+                RefreshInstalledTitles(state);
+            } else if (buttonsDown & HidNpadButton_B) {
+                ClearVariantSelection(state);
+                state.statusLine = UiText(state, "Instalação cancelada.", "Installation cancelled.");
+            }
+
+            visibleEntries = BuildVisibleEntries(state);
+            RenderUi(session, state, visibleEntries);
+            continue;
+        }
+
+        if (state.cheatBuildSelectVisible) {
+            HidTouchScreenState modalTouchState {};
+            const size_t modalTouchStates = hidGetTouchScreenStates(&modalTouchState, 1);
+            const bool modalIsTouching = modalTouchStates > 0 && modalTouchState.count > 0;
+            if (modalIsTouching) {
+                state.lastTouchX = static_cast<int>(modalTouchState.touches[0].x);
+                state.lastTouchY = static_cast<int>(modalTouchState.touches[0].y);
+                const TouchTarget currentTouchTarget =
+                    HitTestTouchTarget(state, visibleEntries, state.lastTouchX, state.lastTouchY);
+                if (currentTouchTarget.kind == TouchTargetKind::CheatBuildOption && currentTouchTarget.index >= 0) {
+                    state.cheatBuildSelection = static_cast<std::size_t>(currentTouchTarget.index);
+                }
+                state.touchActive = true;
+                state.activeTouchTarget = currentTouchTarget;
+            } else if (state.touchActive) {
+                const TouchTarget releasedTarget = HitTestTouchTarget(state, visibleEntries, state.lastTouchX, state.lastTouchY);
+                if (SameTouchTarget(state.activeTouchTarget, releasedTarget)) {
+                    if (releasedTarget.kind == TouchTargetKind::CheatBuildOption && releasedTarget.index >= 0) {
+                        state.cheatBuildSelection = static_cast<std::size_t>(releasedTarget.index);
+                    } else if (releasedTarget.kind == TouchTargetKind::CheatBuildConfirmButton) {
+                        ConfirmSelectedCheatBuildInstall(state);
+                        ReloadLocalState(state);
+                        RefreshInstalledTitles(state);
+                    } else if (releasedTarget.kind == TouchTargetKind::CheatBuildCancelButton) {
+                        ClearCheatBuildSelection(state);
+                        state.statusLine = UiText(state, "Instalação cancelada.", "Installation cancelled.");
+                    }
+                }
+                state.touchActive = false;
+                state.activeTouchTarget = {};
+            }
+
+            if (buttonsDown & HidNpadButton_Down) {
+                if (!state.cheatBuildIds.empty()) {
+                    state.cheatBuildSelection = std::min(state.cheatBuildSelection + 1, state.cheatBuildIds.size() - 1);
+                }
+            }
+            if (buttonsDown & HidNpadButton_Up) {
+                if (state.cheatBuildSelection > 0) {
+                    state.cheatBuildSelection -= 1;
+                }
+            }
+            if (buttonsDown & HidNpadButton_A) {
+                ConfirmSelectedCheatBuildInstall(state);
+                ReloadLocalState(state);
+                RefreshInstalledTitles(state);
+            } else if (buttonsDown & HidNpadButton_B) {
+                ClearCheatBuildSelection(state);
+                state.statusLine = UiText(state, "Instalação cancelada.", "Installation cancelled.");
+            }
+
+            visibleEntries = BuildVisibleEntries(state);
+            RenderUi(session, state, visibleEntries);
+            continue;
+        }
+
+        HidTouchScreenState touchState{};
+        const size_t touchStates = hidGetTouchScreenStates(&touchState, 1);
+        const bool isTouching = touchStates > 0 && touchState.count > 0;
+
+        if (isTouching) {
+            state.lastTouchX = static_cast<int>(touchState.touches[0].x);
+            state.lastTouchY = static_cast<int>(touchState.touches[0].y);
+            const TouchTarget currentTouchTarget = HitTestTouchTarget(state, visibleEntries, state.lastTouchX, state.lastTouchY);
+
+            if (!state.touchActive) {
+                state.touchActive = true;
+                state.activeTouchTarget = currentTouchTarget;
+                PreviewTouchTarget(state, currentTouchTarget);
+            } else {
+                PreviewTouchTarget(state, currentTouchTarget);
+            }
+        } else if (state.touchActive) {
+            const TouchTarget releasedTarget = HitTestTouchTarget(state, visibleEntries, state.lastTouchX, state.lastTouchY);
+            if (SameTouchTarget(state.activeTouchTarget, releasedTarget)) {
+                ActivateTouchTarget(state, releasedTarget);
+            }
+            state.touchActive = false;
+            state.activeTouchTarget = {};
+        }
+
+        const u64 exitButtons = HidNpadButton_Minus;
+        if (state.exitRequested || (CanUseExitControl() && (buttonsDown & exitButtons))) {
+            state.statusLine = UseEnglish(state) ? "Closing application..." : "Encerrando aplicativo...";
+            break;
+        }
+        if (buttonsDown & HidNpadButton_Plus) {
+            OpenSearchDialog(state);
+        }
+        if (buttonsDown & HidNpadButton_Right) {
+            state.focus = AppState::FocusPane::Catalog;
+        }
+        if (buttonsDown & HidNpadButton_Left) {
+            state.focus = AppState::FocusPane::Sections;
+        }
+        if (buttonsDown & HidNpadButton_Down) {
+            if (state.focus == AppState::FocusPane::Sections) {
+                currentSectionIndex = (currentSectionIndex + 1) % sections.size();
+                state.section = sections[currentSectionIndex];
+                state.selection = 0;
+                EnsureCheatsIndexReady(state, false);
+            } else if (!visibleEntries.empty()) {
+                state.selection = std::min(state.selection + 1, visibleEntries.size() - 1);
+            }
+        }
+        if (buttonsDown & HidNpadButton_Up) {
+            if (state.focus == AppState::FocusPane::Sections) {
+                currentSectionIndex = (currentSectionIndex + sections.size() - 1) % sections.size();
+                state.section = sections[currentSectionIndex];
+                state.selection = 0;
+                EnsureCheatsIndexReady(state, false);
+            } else if (state.selection > 0) {
+                state.selection -= 1;
+            }
+        }
+        if (buttonsDown & HidNpadButton_L) {
+            CycleLanguage(state);
+        }
+        if (buttonsDown & HidNpadButton_R) {
+            CycleTheme(state);
+        }
+        if (buttonsDown & HidNpadButton_Y) {
+            CycleSortMode(state);
+        }
+        if (buttonsDown & HidNpadButton_X) {
+            SetProgress(state,
+                        UiText(state, u8"Atualizando", "Refreshing"),
+                        UiText(state, u8"Recarregando dados locais...", "Reloading local data..."),
+                        10);
+            ReloadLocalState(state);
+            const bool allowNetworkRefresh = !IsRyujinxGuestEnvironment();
+            SetProgress(state,
+                        UiText(state, u8"Atualizando", "Refreshing"),
+                        UiText(state,
+                               allowNetworkRefresh ? u8"Verificando catálogo e cache..." : u8"Usando cache local do catálogo...",
+                               allowNetworkRefresh ? "Checking catalog and cache..." : "Using local catalog cache..."),
+                        35);
+            if (LoadCatalog(state, false, allowNetworkRefresh, allowNetworkRefresh, allowNetworkRefresh)) {
+                SetProgress(state,
+                            UiText(state, u8"Atualizando", "Refreshing"),
+                            UiText(state, u8"Lendo títulos instalados...", "Reading installed titles..."),
+                            60);
+                RefreshInstalledTitles(state);
+                if (state.section == ContentSection::Cheats) {
+                    SetProgress(state,
+                                UiText(state, u8"Atualizando", "Refreshing"),
+                                UiText(state,
+                                       allowNetworkRefresh ? u8"Atualizando índice de trapaças..." : u8"Usando índice local de trapaças...",
+                                       allowNetworkRefresh ? "Updating cheats index..." : "Using local cheats index..."),
+                                82);
+                    EnsureCheatsIndexReady(state, allowNetworkRefresh, allowNetworkRefresh);
+                }
+                state.statusLine = UseEnglish(state) ? "Catalog and title scan updated."
+                                                     : "Catálogo e leitura de títulos atualizados.";
+            }
+            SetProgress(state, UiText(state, u8"Atualizando", "Refreshing"), UiText(state, u8"Concluído.", "Done."), 100);
+            ClearProgress(state);
+        }
+        if (buttonsDown & HidNpadButton_A) {
+            HandleSelectionAction(state);
+            if (!state.installConfirmVisible && !state.variantSelectVisible && !state.cheatBuildSelectVisible) {
+                ReloadLocalState(state);
+                RefreshInstalledTitles(state);
+            }
+        }
+
+        visibleEntries = BuildVisibleEntries(state);
+        RenderUi(session, state, visibleEntries);
+    }
+
+    ShutdownPlatform(session);
+    return 0;
+}
+
+}  // namespace mil

@@ -1,0 +1,11 @@
+{
+  "catalogName": "MIL Traducoes",
+  "channel": "stable",
+  "schemaVersion": "1.0",
+  "catalogRevision": "2026.03.21.1",
+  "defaults": {
+    "author": "M.I.L.",
+    "detailsUrl": "https://miltraducoes.com/",
+    "language": "pt-BR"
+  }
+}

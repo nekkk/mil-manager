@@ -1,0 +1,17 @@
+{
+  "id": "smash-cheats",
+  "section": "cheats",
+  "titleId": "01006A800016E000",
+  "name": "Super Smash Bros. Ultimate - Cheats",
+  "summary": "Exemplo de pacote de cheats para demonstrar a mesma pipeline de instalacao.",
+  "packageVersion": "2026.03.18",
+  "contentRevision": "2026.03.18",
+  "language": "multilang",
+  "downloadUrl": "https://miltraducoes.com/switch/packages/smash-cheats.zip",
+  "compatibility": {
+    "minGameVersion": "13.0.1"
+  },
+  "tags": [
+    "cheat"
+  ]
+}

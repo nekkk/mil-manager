@@ -1,0 +1,22 @@
+{
+  "id": "patapon-12-replay-ptbr",
+  "section": "translations",
+  "titleId": "01006DC020DB8000",
+  "name": "PATAPON 1+2 REPLAY - PT-BR",
+  "summary": "Traducao em portugues do Brasil para PATAPON 1+2 REPLAY, com localizacao quase completa para Switch.",
+  "author": "denis",
+  "detailsUrl": "https://www.miltraducoes.com/post/tradu%C3%A7%C3%A3o-pt-br-patapon-1-2-replay",
+  "packageVersion": "1.0.6",
+  "contentRevision": "2025.09.23",
+  "downloadUrl": "https://mega.nz/file/aNFCABJB#MZ6QXpzFhakOk2h-v_m_35KkWJ_sXs8CjJTr_URFxpg",
+  "compatibility": {
+    "exactGameVersions": [
+      "1.0.4",
+      "1.0.6"
+    ]
+  },
+  "tags": [
+    "traducao",
+    "layeredfs"
+  ]
+}

@@ -1,0 +1,18 @@
+{
+  "id": "mk8-mod-tools",
+  "section": "mods",
+  "titleId": "0100152000022000",
+  "name": "Mario Kart 8 Deluxe - Mods & Tools",
+  "summary": "Pacote de exemplo para mods com arquivos prontos para SD.",
+  "packageVersion": "0.3.0",
+  "contentRevision": "2026.03.18",
+  "downloadUrl": "https://miltraducoes.com/switch/packages/mk8-mod-tools.zip",
+  "compatibility": {
+    "minGameVersion": "3.0.0",
+    "maxGameVersion": "3.0.1"
+  },
+  "tags": [
+    "mod",
+    "tool"
+  ]
+}

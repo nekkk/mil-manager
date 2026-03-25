@@ -1,0 +1,15 @@
+.cache/
+build-switch/
+build-switch2/
+dist/
+site/
+
+# Local scratch files
+new 1.txt
+
+# Common editor/system files
+.DS_Store
+Thumbs.db
+*.user
+*.suo
+*.tmp

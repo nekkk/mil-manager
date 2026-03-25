@@ -1,0 +1,14 @@
+{
+  "id": "acnh-save-pack",
+  "section": "savegames",
+  "titleId": "01006F8002326000",
+  "name": "Animal Crossing: New Horizons - Save Pack",
+  "summary": "Exemplo de save distribuido pela mesma estrutura de catalogo.",
+  "packageVersion": "1.0.0",
+  "contentRevision": "2026.03.18",
+  "downloadUrl": "https://miltraducoes.com/switch/packages/acnh-save-pack.zip",
+  "tags": [
+    "save",
+    "backup"
+  ]
+}

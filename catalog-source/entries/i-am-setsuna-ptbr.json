@@ -1,0 +1,22 @@
+{
+  "id": "i-am-setsuna-ptbr",
+  "section": "translations",
+  "titleId": "0100849000BDA000",
+  "name": "I Am Setsuna - PT-BR",
+  "summary": "Porte para Switch da traducao em portugues do Brasil de I Am Setsuna, com interface adaptada e texturas traduzidas.",
+  "author": "denis",
+  "detailsUrl": "https://www.miltraducoes.com/post/i-am-setsuna-porte-da-tradu%C3%A7%C3%A3o-para-switch",
+  "packageVersion": "1.1.0",
+  "contentRevision": "2025.12.19",
+  "downloadUrl": "https://mega.nz/file/2FEhBChA#yJ6X2pFWygCeSlXNAz2BWbhxe5QlDxlvhV3CnjOBXqU",
+  "compatibility": {
+    "exactGameVersions": [
+      "1.1.0"
+    ]
+  },
+  "tags": [
+    "traducao",
+    "layeredfs",
+    "port"
+  ]
+}

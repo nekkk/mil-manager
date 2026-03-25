@@ -1,0 +1,21 @@
+{
+  "id": "dust-ptbr",
+  "section": "translations",
+  "titleId": "0100B6E00A420000",
+  "name": "Dust: An Elysian Tail - PT-BR",
+  "summary": "Traducao em portugues do Brasil para Dust: An Elysian Tail com instalacao por ZIP em layout de SD.",
+  "author": "denis",
+  "packageVersion": "1.06.181214",
+  "contentRevision": "2025.12.02",
+  "downloadUrl": "https://mega.nz/file/DMt0BToC#-b2bnT-m01A3N6yFhiHf30MP4RpIViXsCeqd-QpcjcQ",
+  "featured": true,
+  "compatibility": {
+    "exactGameVersions": [
+      "1.06.181214"
+    ]
+  },
+  "tags": [
+    "traducao",
+    "layeredfs"
+  ]
+}

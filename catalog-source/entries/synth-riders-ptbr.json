@@ -1,0 +1,20 @@
+{
+  "id": "synth-riders-ptbr",
+  "section": "translations",
+  "titleId": "010022E0247B2000",
+  "name": "Synth Riders - PT-BR",
+  "summary": "Traducao em portugues do Brasil para Synth Riders, distribuida em pacote para instalacao via layout de SD.",
+  "author": "Junior Passos",
+  "packageVersion": "0.1.1a1",
+  "contentRevision": "2026.03.21",
+  "downloadUrl": "https://mega.nz/file/Lc8wGYRQ#dGS_NKgCq4n9yL-gS3Ntkigq5iiXJ4ZWLhCLYDfGxq4",
+  "compatibility": {
+    "exactGameVersions": [
+      "0.1.1a1"
+    ]
+  },
+  "tags": [
+    "traducao",
+    "layeredfs"
+  ]
+}

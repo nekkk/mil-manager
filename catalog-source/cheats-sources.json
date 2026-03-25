@@ -1,0 +1,39 @@
+{
+  "schemaVersion": "1.0",
+  "watch": {
+    "catalogSections": [],
+    "titleIds": []
+  },
+  "priorities": {
+    "cheatSlips": 10,
+    "gbatempMirror": 20,
+    "titledb": 30,
+    "chansey": 40,
+    "ibnux": 90
+  },
+  "sources": {
+    "titledb": {
+      "enabled": true,
+      "url": "https://raw.githubusercontent.com/blawar/titledb/master/cheats.json"
+    },
+    "gbatempMirror": {
+      "enabled": true,
+      "treeApiUrl": "https://api.github.com/repos/exefer/gbatemp-matias3ds-cheats/git/trees/master?recursive=1",
+      "rawBaseUrl": "https://raw.githubusercontent.com/exefer/gbatemp-matias3ds-cheats/master/"
+    },
+    "chansey": {
+      "enabled": true,
+      "treeApiUrl": "https://api.github.com/repos/ChanseyIsTheBest/NX-60FPS-RES-GFX-Cheats/git/trees/main?recursive=1",
+      "rawBaseUrl": "https://raw.githubusercontent.com/ChanseyIsTheBest/NX-60FPS-RES-GFX-Cheats/main/"
+    },
+    "cheatSlips": {
+      "enabled": true,
+      "seedPages": []
+    },
+    "ibnux": {
+      "enabled": true,
+      "treeApiUrl": "https://api.github.com/repos/ibnux/switch-cheat/git/trees/master?recursive=1",
+      "rawBaseUrl": "https://raw.githubusercontent.com/ibnux/switch-cheat/master/"
+    }
+  }
+}

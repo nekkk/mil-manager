@@ -1,0 +1,22 @@
+{
+  "id": "puzzle-quest-immortal-edition-ptbr",
+  "section": "translations",
+  "titleId": "01001110232DA000",
+  "name": "Puzzle Quest Immortal Edition - PT-BR",
+  "summary": "Traducao em portugues do Brasil para Puzzle Quest Immortal Edition com suporte as versoes recentes de Switch.",
+  "author": "denis e juniorpassos",
+  "detailsUrl": "https://www.miltraducoes.com/post/tradu%C3%A7%C3%A3o-pt-br-puzzle-quest-immortal-edition",
+  "packageVersion": "1.0.3.3576",
+  "contentRevision": "2025.12.28",
+  "downloadUrl": "https://mega.nz/file/DRs3wJKb#f68ZRYVyk_RxxbDFpSW4eVcB1H_tSCGGWx1ScwjRmJE",
+  "compatibility": {
+    "exactGameVersions": [
+      "1.0.0.3380",
+      "1.0.3.3576"
+    ]
+  },
+  "tags": [
+    "traducao",
+    "layeredfs"
+  ]
+}
