@@ -1,0 +1,521 @@
+{
+  "auto": {
+    "1_build": {
+      "696bef70": "1 build"
+    },
+    "1_variant": {
+      "10c641bd": "1 variante"
+    },
+    "a_install_remove_l_switch_language_r_switch_theme_search_exit": {
+      "a4f5535c": "A instala/remove • L alterna idioma • R alterna tema • + pesquisa • - sai"
+    },
+    "active_catalog_source": {
+      "ca0791e9": "Fonte ativa do catálogo"
+    },
+    "available_variants": {
+      "bf44848c": " Variantes disponíveis: "
+    },
+    "build_mismatch": {
+      "1951581c": "Build diferente",
+      "5ee09a51": "Build Divergente"
+    },
+    "build_not_detected": {
+      "cc8a3d29": "Build não detectado"
+    },
+    "build_unknown": {
+      "2ac47a86": "Build Não Detectado"
+    },
+    "builds": {
+      "1994c708": "builds"
+    },
+    "cache_sdmc_switch_mil_manager_cache": {
+      "af9be0a8": "- Cache: sdmc:/switch/mil_manager/cache"
+    },
+    "catalog_cache_sdmc_switch_mil_manager_cache_index_json": {
+      "40ab74ef": "- Cache do índice: sdmc:/switch/mil_manager/cache/index.json"
+    },
+    "catalog_has_no_title_ids_for_local_probing": {
+      "d494d802": "Catálogo sem title IDs para sondagem local."
+    },
+    "catalog_metadata": {
+      "eedb23a4": "Metadados do catálogo"
+    },
+    "categories": {
+      "e5aa268a": "Categorias: "
+    },
+    "channel": {
+      "8b228494": "Canal: "
+    },
+    "cheat_depends_on_a_specific_build_confirmation_is_required_to_choose_manually": {
+      "c6a6964a": "Cheat depende de build específico; confirmação necessária para escolher manualmente."
+    },
+    "cheat_published_for_detected_build": {
+      "e44c2d24": "Cheat publicado para o build detectado: "
+    },
+    "choose_another_build_manually": {
+      "50a26258": "Escolher manualmente outro build?"
+    },
+    "choose_cheat_build": {
+      "d7249a92": "Escolha o build do cheat"
+    },
+    "choose_how_to_proceed": {
+      "50c7ff02": "Escolha como deseja prosseguir."
+    },
+    "choose_the_desired_build": {
+      "cbfa374d": "Escolha o build desejado."
+    },
+    "choose_the_variant_to_install": {
+      "b5212728": "Escolha a variante desejada."
+    },
+    "choose_variant": {
+      "c04a74d4": "Escolha a variante"
+    },
+    "community": {
+      "8a1085ce": "Comunidade"
+    },
+    "compatibility_unspecified": {
+      "405326e6": "Compatibilidade não especificada"
+    },
+    "compatible_with_installed_version": {
+      "22214859": "Compatível com a versão instalada: "
+    },
+    "complete": {
+      "5ac61a8e": "Completo"
+    },
+    "configuration_in_sdmc_switch_mil_manager_settings_ini": {
+      "9cb3dccc": "- Configuração em sdmc:/switch/mil_manager/settings.ini"
+    },
+    "console_detected_local_reading_always_enabled_ignoring_scan_mode_off": {
+      "ce52efd8": "Console detectado. Leitura local sempre ativa; ignorando scan_mode=off."
+    },
+    "console_emulator_compatibility_with_service_fallback": {
+      "d8553382": "- Compatibilidade console + emulador por degradação de serviços"
+    },
+    "continue_with_installation": {
+      "e004a1f3": "Prosseguir com a instalação?"
+    },
+    "controls": {
+      "7efc975d": "Controles"
+    },
+    "credits": {
+      "9af3b585": "Autoria:"
+    },
+    "current_architecture": {
+      "3de3ccbc": "Arquitetura atual"
+    },
+    "details": {
+      "59385180": "Detalhes"
+    },
+    "detected_build": {
+      "e67940af": "Build detectado: "
+    },
+    "detected_environment": {
+      "6910e65d": "Ambiente detectado"
+    },
+    "directories": {
+      "cbf7a254": "Diretórios"
+    },
+    "done": {
+      "d1933331": "Concluído."
+    },
+    "downloading_initial_cheats_index": {
+      "cc07c9f3": "Baixando índice inicial de trapaças..."
+    },
+    "downloading_initial_saves_index": {
+      "171384e9": "Baixando índice inicial de saves..."
+    },
+    "emulator_import_sdmc_switch_mil_manager_cache_installed_titles_cache_json": {
+      "eed71afd": "- Importação do emulador: sdmc:/switch/mil_manager/cache/installed-titles-cache.json"
+    },
+    "entry_not_found_for_installation": {
+      "bedb4552": "Entrada não encontrada para instalação."
+    },
+    "event": {
+      "65958a57": "Evento"
+    },
+    "exact": {
+      "42ecbf0b": " Exatas: "
+    },
+    "extracting_package": {
+      "b68ea473": "Extraindo pacote..."
+    },
+    "failed_to_open_search": {
+      "4fe7fca5": "Falha ao abrir pesquisa."
+    },
+    "game": {
+      "7aa860e3": "Jogo: "
+    },
+    "game_build_not_detected_installation_will_require_choosing_a_build_manually": {
+      "7e1b4351": "Build do jogo não detectado. A instalação vai pedir a escolha manual de um build."
+    },
+    "game_not_found_on_console_emulator": {
+      "d0a3c0d4": "Jogo não encontrado no console/emulador."
+    },
+    "game_not_found_on_console_emulator_available_variants": {
+      "afa8a5d6": "Jogo não encontrado no console/emulador. Variantes disponíveis: "
+    },
+    "game_version": {
+      "9907ed7b": "Versão do jogo: "
+    },
+    "general": {
+      "b50f6487": "Geral"
+    },
+    "generated_at": {
+      "fc371c54": "Gerado em: "
+    },
+    "graphics": {
+      "cb56a04c": "Gráficos"
+    },
+    "homebrew_app_to_list_and_install_translations_mods_cheats_and_save_games": {
+      "90b220a4": "Aplicativo homebrew para listar e instalar traduções, mods, cheats e saves."
+    },
+    "installation_cancelled": {
+      "c8e7c424": "Instalação cancelada."
+    },
+    "installed": {
+      "4922069d": " [INSTALADO]",
+      "7ecbd8af": "Instalado"
+    },
+    "installed_build": {
+      "51ef0b9f": "Build instalado: "
+    },
+    "installed_content_sdmc_atmosphere_contents_saves_remain_in_sdmc": {
+      "9aa23d48": "- Conteúdo instalado: sdmc:/atmosphere/contents/ (saves continuam em sdmc:/)"
+    },
+    "installed_game_version_unavailable": {
+      "9555d086": "Versão do jogo indisponível."
+    },
+    "installed_game_version_unavailable_available_variants": {
+      "475f57c2": "Versão do jogo indisponível. Variantes disponíveis: "
+    },
+    "installed_locally": {
+      "87133ed9": " • Instalado localmente"
+    },
+    "installed_titles_cache_json_does_not_contain_a_titles_array": {
+      "5c9370d5": "Arquivo installed-titles-cache.json sem array titles."
+    },
+    "installed_titles_loaded_using_full_scan": {
+      "69e538d5": "Títulos instalados carregados por scan completo."
+    },
+    "installing_cheat": {
+      "7a474d34": "Instalando trapaça"
+    },
+    "installing_package": {
+      "2fbaefa4": "Instalando pacote"
+    },
+    "invalid_installed_titles_cache_json_file": {
+      "04c8811f": "Arquivo installed-titles-cache.json inválido."
+    },
+    "language": {
+      "28ca238d": "Idioma: "
+    },
+    "last_update": {
+      "a4763a6d": "Última atualização: "
+    },
+    "left_right_change_focus_up_down_navigate_y_sort_x_refresh": {
+      "fa387e9e": "LEFT/RIGHT muda foco • UP/DOWN navega • Y ordena • X atualiza"
+    },
+    "list": {
+      "2d2f0089": "Lista"
+    },
+    "load_a_catalog_or_change_section_to_view_package_details": {
+      "3275a4dd": "Carregue um catálogo ou troque de seção para ver os detalhes do pacote selecionado."
+    },
+    "loading_cheats": {
+      "79ce7368": "Carregando trapaças"
+    },
+    "loading_saves": {
+      "e9c8ad5c": "Carregando saves"
+    },
+    "manager_dedicated_to_translations_dubs_mods_cheats_and_saves_for_both_real_switch_and_ryujinx": {
+      "8b2b4051": "Gerenciador dedicado a traduções, dublagens, mods, cheats e saves para Switch real e Ryujinx."
+    },
+    "matching_build": {
+      "d0b31b92": "Mesmo Build"
+    },
+    "matching_version": {
+      "5100aaab": "Mesma Versão"
+    },
+    "max": {
+      "5f63ecc6": " Max: "
+    },
+    "mil_manager": {
+      "a0f28a0e": "Gerenciador MIL"
+    },
+    "min": {
+      "a9b9eef2": " Min: "
+    },
+    "modded": {
+      "2c56542e": "Modificado"
+    },
+    "more_than_one_cheat_set_is_available_for_the_detected_build": {
+      "da9994b8": "Mais de um conjunto de cheats está disponível para o build detectado ("
+    },
+    "more_than_one_variant_is_compatible_with_the_detected_game_version": {
+      "258d30f7": "Mais de uma variante é compatível com a versão detectada ("
+    },
+    "name": {
+      "168d7fd6": "Nome: "
+    },
+    "no": {
+      "9afa1722": "Não"
+    },
+    "no_cheat_build_selected": {
+      "4024bee6": "Nenhum build de cheat selecionado."
+    },
+    "no_cheat_file_is_available_for_this_build": {
+      "2b9f750f": "Nenhum arquivo de cheat disponível para este build."
+    },
+    "no_cheat_matches_the_detected_build": {
+      "bf51df73": "Nenhum cheat coincide com o build detectado ("
+    },
+    "no_compatible_or_selectable_variant_was_found": {
+      "af2ceba1": "Nenhuma variante compatível ou selecionável foi encontrada."
+    },
+    "no_download_is_available_for_this_entry_variant": {
+      "10dfcbe3": "Nenhum download disponível para esta entrada/variante."
+    },
+    "no_items_available_in_this_section": {
+      "8523cf74": "Nenhum item disponível nesta seção."
+    },
+    "no_published_cheat_for_detected_build": {
+      "a61ccf7c": "Nenhum cheat publicado para o build detectado: "
+    },
+    "no_published_cheats_index_was_found_for_this_title": {
+      "cf3827fb": "Nenhum índice de cheats publicado foi encontrado para este título."
+    },
+    "no_published_cheats_were_found_for_this_title": {
+      "d3e7c720": "Nenhum cheat publicado foi encontrado para este título."
+    },
+    "no_variant_matches_the_detected_game_version": {
+      "92c0b4b0": "Nenhuma variante coincide exatamente com a versão detectada ("
+    },
+    "no_variant_selected": {
+      "4dfcca0b": "Nenhuma variante selecionada."
+    },
+    "not_installed": {
+      "3c7ba6b7": " • Não instalado",
+      "41e6994d": "Não Instalado"
+    },
+    "nsinitialize_failed_emulator_or_ns_service_unavailable": {
+      "b2fd905f": "nsInitialize falhou. Emulador ou serviço NS indisponível."
+    },
+    "nsinitialize_failed_ns_service_unavailable": {
+      "62e11972": "nsInitialize falhou. Serviço NS indisponível."
+    },
+    "nslistapplicationrecord_failed_in_full_mode": {
+      "bc79193c": "nsListApplicationRecord falhou no modo full."
+    },
+    "package": {
+      "70a64cc4": "Pacote: "
+    },
+    "package_version": {
+      "dec16f48": "Versão do pacote: "
+    },
+    "published_builds": {
+      "3cfed320": "Builds publicados: "
+    },
+    "published_variants": {
+      "d62b33df": "Variantes publicadas: "
+    },
+    "purpose": {
+      "f13325c4": "Objetivo"
+    },
+    "reading_installed_titles": {
+      "d4610aba": "Lendo títulos instalados..."
+    },
+    "receipts_sdmc_switch_mil_manager_receipts": {
+      "3e53671e": "- Recibos: sdmc:/switch/mil_manager/receipts"
+    },
+    "refreshing": {
+      "abb99965": "Atualizando"
+    },
+    "reloading_local_data": {
+      "a022338d": "Recarregando dados locais..."
+    },
+    "remote_json_catalog_with_automatic_local_cache": {
+      "06d06979": "- Catálogo remoto em JSON com cache local automático"
+    },
+    "revision": {
+      "5d038f7b": "Revisão: "
+    },
+    "search": {
+      "7392a631": "Pesquisa: "
+    },
+    "search_by_name_id_or_build": {
+      "d38a65de": "Pesquisar por nome, ID ou build"
+    },
+    "search_by_name_or_title_id": {
+      "95666cd5": "Pesquisar por nome ou ID do título"
+    },
+    "search_cleared": {
+      "a30ec4b0": "Pesquisa limpa."
+    },
+    "section": {
+      "f071a7ea": "Seção: "
+    },
+    "select_the_cheat_build_manually_for_this_title": {
+      "03b25ff7": "Selecione manualmente o build de cheats para este título."
+    },
+    "select_which_package_variant_should_be_installed_for_this_title": {
+      "4a970c5f": "Selecione a variante do pacote para instalar neste título."
+    },
+    "sort_mode": {
+      "4d92de4f": "Ordenação: "
+    },
+    "source": {
+      "5222954e": "Origem: ",
+      "f2a62f79": "Fonte: "
+    },
+    "sources": {
+      "33787c49": "Origens: "
+    },
+    "starter": {
+      "fd8f3640": "Inicial"
+    },
+    "suggested": {
+      "0ac760ab": " [SUGERIDO]"
+    },
+    "the_detected_game_version_differs_from_the_package_compatibility": {
+      "f33b4cba": "A versão detectada do jogo é diferente da compatível com o pacote ("
+    },
+    "the_emulator_library_is_not_visible_to_homebrew_sync_titles_to_sdmc_switch_mil_manager_cache_installed_titles_cache_json": {
+      "a5903300": "Biblioteca do emulador não fica visível ao homebrew. Sincronize os títulos para sdmc:/switch/mil_manager/cache/installed-titles-cache.json."
+    },
+    "the_game_s_build_id_could_not_be_detected_choose_a_cheat_build_manually": {
+      "d29df050": "O build ID do jogo não pôde ser detectado. Escolher manualmente um build de cheats?"
+    },
+    "the_game_s_build_id_was_not_detected_choose_the_cheat_build_manually": {
+      "f2bb47de": "O build ID do jogo não foi detectado. Escolha manualmente o build de cheats."
+    },
+    "the_game_version_could_not_be_detected_continue_with_installation": {
+      "7996cd53": "A versão do jogo não pôde ser detectada. Prosseguir com a instalação?"
+    },
+    "the_game_version_was_not_detected_choose_the_package_variant_manually": {
+      "669d0c11": "A versão do jogo não foi detectada. Escolha manualmente a variante do pacote."
+    },
+    "the_title_was_not_detected_on_the_console_emulator_choose_a_cheat_build_manually": {
+      "70a68644": "O título não foi detectado no console/emulador. Escolher manualmente um build de cheats?"
+    },
+    "the_title_was_not_detected_on_the_console_emulator_continue_with_installation": {
+      "1c4448c4": "O título não foi detectado no console/emulador. Prosseguir com a instalação?"
+    },
+    "there_are_no_published_cheats_for_the_detected_build": {
+      "63565d60": "Não há cheats publicados para o build detectado ("
+    },
+    "this_package_does_not_specify_compatible_game_versions_continue_with_installation": {
+      "4e402b29": "O pacote não possui versão compatível especificada. Prosseguir com a instalação?"
+    },
+    "title_id": {
+      "d8311ae0": "ID Título: "
+    },
+    "title_not_detected": {
+      "ebfe9db1": "Título não detectado"
+    },
+    "title_not_detected_on_the_console_emulator_installation_will_require_choosing_a_build_manually": {
+      "3e173064": "Título não detectado no console/emulador. A instalação vai pedir a escolha manual de um build."
+    },
+    "titles_detected_by_catalog_probing": {
+      "a0c556e8": "Títulos detectados por sondagem do catálogo."
+    },
+    "titles_imported_from_installed_titles_cache_json": {
+      "42f4277f": "Títulos importados de installed-titles-cache.json."
+    },
+    "unavailable": {
+      "a0de08a1": "não disponível"
+    },
+    "unlocked": {
+      "1f997ffd": "Desbloqueado"
+    },
+    "updating_cheats_index_and_cache": {
+      "f49bbc38": "Atualizando índice e cache de trapaças..."
+    },
+    "updating_saves_index_and_cache": {
+      "c42fdf1e": "Atualizando índice e cache de saves..."
+    },
+    "variants": {
+      "8b151e55": "variantes",
+      "e4869171": "Variantes: "
+    },
+    "version_mismatch": {
+      "193891a4": "Versão Divergente",
+      "9d4a7de4": "Versão divergente"
+    },
+    "version_not_detected": {
+      "0976c9ee": "Versão não detectada"
+    },
+    "version_unknown": {
+      "91eaf9f7": "Versão Não Detectada"
+    },
+    "warning_package_is_outside_the_supported_range_for_the_installed_game": {
+      "66207a30": "Atenção: pacote fora da faixa suportada para o jogo instalado ("
+    },
+    "zip_installation_to_sdmc_atmosphere_contents_for_mods_translations_and_cheats": {
+      "80d3253c": "- Instalação por ZIP em sdmc:/atmosphere/contents/ para mods, traduções e cheats"
+    }
+  },
+  "ui": {
+    "about": {
+      "active_source": "Fonte ativa: ",
+      "environment": "Ambiente: ",
+      "loader_info": "Loader info: "
+    },
+    "app": {
+      "title": "Gerenciador M.I.L."
+    },
+    "button": {
+      "cancel": "Cancelar",
+      "install": "Instalar",
+      "language": "Idioma",
+      "refresh": "Atualizar",
+      "remove": "Remover",
+      "search": "Pesquisar",
+      "sort": "Ordenar",
+      "theme": "Tema",
+      "yes": "Sim"
+    },
+    "content": {
+      "cheat": "Trapaça",
+      "dubbing": "Dublagem",
+      "mod": "Mod",
+      "save": "Save",
+      "translation": "Tradução"
+    },
+    "empty": {
+      "cheats": "Títulos não identificados. Utilize a Pesquisa para localizar a trapaça desejada.",
+      "default": "Ainda não há conteúdo disponível para esta seção no catálogo atual.",
+      "saves": "Títulos não identificados. Utilize a Pesquisa para localizar o save desejado.",
+      "title": "Nenhum item"
+    },
+    "label": {
+      "sort_prefix": "Ordem: ",
+      "source_prefix": "Fonte: "
+    },
+    "missing_key": "[[chave ausente]]",
+    "section": {
+      "about": "Sobre a M.I.L.",
+      "cheats": "Trapaças",
+      "mods": "Mods",
+      "saves": "Jogos Salvos",
+      "translations": "Traduções & Dublagens"
+    },
+    "sort": {
+      "name": "Nome",
+      "recent": "Recentes",
+      "recommended": "Relevância"
+    },
+    "source": {
+      "cache": "Cache local do catálogo",
+      "emulator_sync": "Catálogo sincronizado do emulador",
+      "local": "Catálogo local",
+      "none": "Nenhuma fonte ativa",
+      "online": "Catálogo online"
+    },
+    "status": {
+      "games_prefix": "Jogos ",
+      "language_saved": "Idioma salvo em settings.ini",
+      "packages_prefix": "Pacotes ",
+      "theme_changed": "Tema alterado para "
+    }
+  }
+}

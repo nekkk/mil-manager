@@ -1,4 +1,4 @@
-#include "mil/app.hpp"
+﻿#include "mil/app.hpp"
 
 #include <algorithm>
 #include <chrono>
@@ -10,6 +10,7 @@
 #include <string>
 #include <thread>
 #include <tuple>
+#include <unordered_map>
 #include <vector>
 
 #include <switch.h>
@@ -215,6 +216,55 @@ bool LoadPackManifestFromFile(const std::string& path, PackManifestInfo& manifes
     return !json.empty() && ParsePackManifestJson(json, manifest);
 }
 
+void FlattenLanguageJsonValue(const picojson::value& value,
+                              const std::string& prefix,
+                              std::unordered_map<std::string, std::string>& output) {
+    if (value.is<std::string>()) {
+        output[prefix] = value.get<std::string>();
+        return;
+    }
+    if (!value.is<picojson::object>()) {
+        return;
+    }
+
+    const auto& object = value.get<picojson::object>();
+    for (const auto& pair : object) {
+        const std::string childKey = prefix.empty() ? pair.first : prefix + "." + pair.first;
+        FlattenLanguageJsonValue(pair.second, childKey, output);
+    }
+}
+
+bool LoadLanguageStringsFromFile(const std::string& path,
+                                 std::unordered_map<std::string, std::string>& output,
+                                 std::string& error) {
+    output.clear();
+    const std::string json = ReadTextFile(path);
+    if (json.empty()) {
+        error = "Language file not found.";
+        return false;
+    }
+
+    picojson::value root;
+    const std::string parseError = picojson::parse(root, json);
+    if (!parseError.empty() || !root.is<picojson::object>()) {
+        error = "Invalid language JSON.";
+        return false;
+    }
+
+    FlattenLanguageJsonValue(root, "", output);
+    return true;
+}
+
+std::string LanguageJsonPath(LanguageMode mode) {
+    switch (mode) {
+        case LanguageMode::EnUs:
+            return "romfs:/lang/en-US.json";
+        case LanguageMode::PtBr:
+        default:
+            return "romfs:/lang/pt-BR.json";
+    }
+}
+
 bool DesiredPackAlreadyPresent(const std::string& localManifestPath,
                                const std::string& desiredRevision,
                                const std::string& desiredPackSha256) {
@@ -355,6 +405,8 @@ struct AppState {
     std::string progressTitle;
     std::string progressDetail;
     int progressPercent = 0;
+    std::unordered_map<std::string, std::string> languageStrings;
+    bool languageStringsLoaded = false;
     PlatformSession* activeSession = nullptr;
 };
 
@@ -436,7 +488,7 @@ bool EntryUsesCheatsIndex(const AppState& state, const CatalogEntry& entry);
 bool EnsureSavesIndexReady(AppState& state, bool forceRemoteRefresh = false, bool allowRyujinxRemote = false);
 void RefreshDerivedSaveEntries(AppState& state);
 bool EntryUsesSavesIndex(const AppState& state, const CatalogEntry& entry);
-const char* UiText(const AppState& state, const char* ptBr, const char* enUs);
+std::string UiText(const AppState& state, const char* ptBr, const char* enUs);
 bool UseEnglish(const AppState& state);
 const CheatTitleRecord* FindCheatTitleRecord(const CheatsIndex& index, const std::string& titleId);
 const CheatBuildRecord* FindCheatBuildRecord(const CheatTitleRecord& title, const std::string& buildId);
@@ -860,12 +912,12 @@ bool OpenSearchDialog(AppState& state) {
     }
 
     swkbdConfigMakePresetDefault(&keyboard);
-    const char* guideText = UiText(state, "Pesquisar por nome, ID ou build", "Search by name, ID or build");
+    std::string guideText = UiText(state, "Pesquisar por nome, ID ou build", "Search by name, ID or build");
     if (state.section == ContentSection::SaveGames) {
         guideText = UiText(state, u8"Pesquisar por nome ou ID do título", "Search by name or title ID");
     }
-    swkbdConfigSetGuideText(&keyboard, guideText);
-    swkbdConfigSetHeaderText(&keyboard, UiText(state, "Pesquisar", "Search"));
+    swkbdConfigSetGuideText(&keyboard, guideText.c_str());
+    swkbdConfigSetHeaderText(&keyboard, state.config.language == LanguageMode::EnUs ? "Search" : "Pesquisar");
     swkbdConfigSetInitialText(&keyboard, state.searchQuery.c_str());
     swkbdConfigSetStringLenMax(&keyboard, 64);
 
@@ -2343,8 +2395,82 @@ bool UseEnglish(const AppState& state) {
     return state.config.language == LanguageMode::EnUs;
 }
 
-const char* UiText(const AppState& state, const char* ptBr, const char* enUs) {
-    return UseEnglish(state) ? enUs : ptBr;
+std::string NormalizeLanguageKeyPart(std::string text) {
+    std::string normalized;
+    normalized.reserve(text.size());
+    bool lastUnderscore = false;
+    for (unsigned char ch : text) {
+        if ((ch >= 'a' && ch <= 'z') || (ch >= '0' && ch <= '9')) {
+            normalized.push_back(static_cast<char>(ch));
+            lastUnderscore = false;
+            continue;
+        }
+        if (ch >= 'A' && ch <= 'Z') {
+            normalized.push_back(static_cast<char>(ch - 'A' + 'a'));
+            lastUnderscore = false;
+            continue;
+        }
+        if (!lastUnderscore) {
+            normalized.push_back('_');
+            lastUnderscore = true;
+        }
+    }
+    while (!normalized.empty() && normalized.front() == '_') {
+        normalized.erase(normalized.begin());
+    }
+    while (!normalized.empty() && normalized.back() == '_') {
+        normalized.pop_back();
+    }
+    if (normalized.empty()) {
+        normalized = "text";
+    }
+    return normalized;
+}
+
+std::string BuildAutoLanguageKey(const char* ptBr, const char* enUs) {
+    std::string portuguese = ptBr != nullptr ? ptBr : "";
+    std::string english = enUs != nullptr ? enUs : "";
+    const std::string normalized = NormalizeLanguageKeyPart(english);
+    std::uint32_t hash = 2166136261u;
+    const std::string combined = portuguese + "" + english;
+    for (unsigned char ch : combined) {
+        hash ^= ch;
+        hash *= 16777619u;
+    }
+    char suffix[16];
+    std::snprintf(suffix, sizeof(suffix), "%08x", hash);
+    return "auto." + normalized + "." + suffix;
+}
+
+std::string LookupLanguageString(const AppState& state, const std::string& key) {
+    const auto it = state.languageStrings.find(key);
+    if (it != state.languageStrings.end() && !it->second.empty()) {
+        return it->second;
+    }
+    return "[[" + key + "]]";
+}
+
+std::string UiText(const AppState& state, const char* ptBr, const char* enUs) {
+    (void)ptBr;
+    return LookupLanguageString(state, BuildAutoLanguageKey(ptBr, enUs));
+}
+
+std::string UiString(const AppState& state, const char* key, const char* ptBr, const char* enUs) {
+    (void)ptBr;
+    (void)enUs;
+    return LookupLanguageString(state, key != nullptr ? key : "ui.missing_key");
+}
+
+void ReloadLanguageStrings(AppState& state) {
+    std::unordered_map<std::string, std::string> loaded;
+    std::string error;
+    if (LoadLanguageStringsFromFile(LanguageJsonPath(state.config.language), loaded, error)) {
+        state.languageStrings = std::move(loaded);
+        state.languageStringsLoaded = true;
+        return;
+    }
+    state.languageStrings.clear();
+    state.languageStringsLoaded = false;
 }
 
 std::string LocalizedEntryIntro(const AppState& state, const CatalogEntry& entry) {
@@ -2388,16 +2514,16 @@ std::string LocalizedEntrySummary(const AppState& state, const CatalogEntry& ent
 std::string LocalizeContentTypeLabel(const AppState& state, const std::string& rawType) {
     const std::string type = ToLowerAscii(rawType);
     if (type == "translation") {
-        return UiText(state, "Tradução", "Translation");
+        return UiString(state, "ui.content.translation", u8"Tradu??o", "Translation");
     }
     if (type == "dub") {
-        return UiText(state, "Dublagem", "Dubbing");
+        return UiString(state, "ui.content.dubbing", "Dublagem", "Dubbing");
     }
     if (type == "mod") {
-        return "Mod";
+        return UiString(state, "ui.content.mod", "Mod", "Mod");
     }
     if (type == "cheat") {
-        return UiText(state, "Trapaça", "Cheat");
+        return UiString(state, "ui.content.cheat", u8"Trapa?a", "Cheat");
     }
     return rawType;
 }
@@ -2417,16 +2543,16 @@ std::vector<std::string> EntryContentTypeLabels(const AppState& state, const Cat
     if (labels.empty()) {
         switch (entry.section) {
             case ContentSection::Translations:
-                appendUnique(UiText(state, "Tradução", "Translation"));
+                appendUnique(UiString(state, "ui.content.translation", u8"Tradu??o", "Translation"));
                 break;
             case ContentSection::ModsTools:
-                appendUnique("Mod");
+                appendUnique(UiString(state, "ui.content.mod", "Mod", "Mod"));
                 break;
             case ContentSection::Cheats:
-                appendUnique("Cheat");
+                appendUnique(UiString(state, "ui.content.cheat", u8"Trapa?a", "Cheat"));
                 break;
             case ContentSection::SaveGames:
-                appendUnique(UiText(state, "Save", "Save"));
+                appendUnique(UiString(state, "ui.content.save", "Save", "Save"));
                 break;
             default:
                 break;
@@ -3629,84 +3755,50 @@ std::string LocalizePlatformNote(const AppState& state, const std::string& note)
     }
 
     if (note == "Biblioteca do emulador não fica visível ao homebrew. Sincronize os títulos para sdmc:/switch/mil_manager/cache/installed-titles-cache.json.") {
-        return "The emulator library is not visible to homebrew. Sync titles to sdmc:/switch/mil_manager/cache/installed-titles-cache.json.";
+        return UiText(state, u8"Biblioteca do emulador n?o fica vis?vel ao homebrew. Sincronize os t?tulos para sdmc:/switch/mil_manager/cache/installed-titles-cache.json.", "The emulator library is not visible to homebrew. Sync titles to sdmc:/switch/mil_manager/cache/installed-titles-cache.json.");
     }
     if (note == "Arquivo installed-titles-cache.json inválido.") {
-        return "Invalid installed-titles-cache.json file.";
+        return UiText(state, u8"Arquivo installed-titles-cache.json inv?lido.", "Invalid installed-titles-cache.json file.");
     }
     if (note == "Arquivo installed-titles-cache.json sem array titles.") {
-        return "installed-titles-cache.json does not contain a titles array.";
+        return UiText(state, u8"Arquivo installed-titles-cache.json sem array titles.", "installed-titles-cache.json does not contain a titles array.");
     }
     if (note == "Títulos importados de installed-titles-cache.json.") {
-        return "Titles imported from installed-titles-cache.json.";
+        return UiText(state, u8"T?tulos importados de installed-titles-cache.json.", "Titles imported from installed-titles-cache.json.");
     }
     if (note == "nsInitialize falhou. Serviço NS indisponível.") {
-        return "nsInitialize failed. NS service unavailable.";
+        return UiText(state, u8"nsInitialize falhou. Servi?o NS indispon?vel.", "nsInitialize failed. NS service unavailable.");
     }
     if (note == "nsListApplicationRecord falhou no modo full.") {
-        return "nsListApplicationRecord failed in full mode.";
+        return UiText(state, u8"nsListApplicationRecord falhou no modo full.", "nsListApplicationRecord failed in full mode.");
     }
     if (note == "Títulos instalados carregados por scan completo.") {
-        return "Installed titles loaded using full scan.";
+        return UiText(state, u8"T?tulos instalados carregados por scan completo.", "Installed titles loaded using full scan.");
     }
     if (note == "Catálogo sem title IDs para sondagem local.") {
-        return "Catalog has no title IDs for local probing.";
+        return UiText(state, u8"Cat?logo sem title IDs para sondagem local.", "Catalog has no title IDs for local probing.");
     }
     if (note == "nsInitialize falhou. Emulador ou serviço NS indisponível.") {
-        return "nsInitialize failed. Emulator or NS service unavailable.";
+        return UiText(state, u8"nsInitialize falhou. Emulador ou servi?o NS indispon?vel.", "nsInitialize failed. Emulator or NS service unavailable.");
     }
     if (note == "Títulos detectados por sondagem do catálogo.") {
-        return "Titles detected by catalog probing.";
+        return UiText(state, u8"T?tulos detectados por sondagem do cat?logo.", "Titles detected by catalog probing.");
     }
-    if (note == "Console detectado. Leitura local sempre ativa; ignorando scan_mode=off.") {
-        return "Console detected. Local reading always enabled; ignoring scan_mode=off.";
+    if (note == u8"Console detectado. Leitura local sempre ativa; ignorando scan_mode=off.") {
+        return UiText(state, u8"Console detectado. Leitura local sempre ativa; ignorando scan_mode=off.", "Console detected. Local reading always enabled; ignoring scan_mode=off.");
     }
-    if (note == "Ambiente não confirmado. Leitura local mantida em modo seguro.") {
-        return "Unconfirmed environment. Local reading kept in safe mode.";
-    }
-    if (note == "Leitura de títulos desativada em settings.ini.") {
-        return "Title reading disabled in settings.ini.";
-    }
-    if (note == "Console detectado. Modo automático usando leitura completa.") {
-        return "Console detected. Auto mode using full scan.";
-    }
-    if (note == "Ambiente não confirmado. Modo automático segue em fallback seguro até detectar console com confiança.") {
-        return "Unconfirmed environment. Auto mode remains in safe fallback until a console is detected with confidence.";
-    }
-    if (note == "Ambiente não confirmado. Leitura local por NS foi bloqueada para evitar crash em emuladores.") {
-        return "Unconfirmed environment. Local NS title reading was blocked to avoid crashes on emulators.";
-    }
-    if (note == "Catálogo indisponível. Sondagem local ignorada.") {
-        return "Catalog unavailable. Local probing skipped.";
-    }
-    if (note == "Leitura local não configurada.") {
-        return "Local reading not configured.";
-    }
-
     return note;
 }
 
-const char* SortModeLabel(const AppState& state, SortMode mode) {
-    if (!UseEnglish(state)) {
-        switch (mode) {
-            case SortMode::Recent:
-                return "Recentes";
-            case SortMode::Name:
-                return "Nome";
-            case SortMode::Recommended:
-            default:
-                return "Relevância";
-        }
-    }
-
+std::string SortModeLabel(const AppState& state, SortMode mode) {
     switch (mode) {
         case SortMode::Recent:
-            return "Recent";
+            return UiString(state, "ui.sort.recent", "Recentes", "Recent");
         case SortMode::Name:
-            return "Name";
+            return UiString(state, "ui.sort.name", "Nome", "Name");
         case SortMode::Recommended:
         default:
-            return "Recommended";
+            return UiString(state, "ui.sort.recommended", u8"Relev?ncia", "Recommended");
     }
 }
 
@@ -3719,86 +3811,70 @@ std::string GetCatalogSourceLabel(const AppState& state) {
     }
 
     if (activeSource->empty()) {
-        return UiText(state, "Nenhuma fonte ativa", "No active source");
+        return UiString(state, "ui.source.none", "Nenhuma fonte ativa", "No active source");
     }
     if (*activeSource == kSwitchLocalIndexPath || *activeSource == kSwitchLocalCheatsIndexPath ||
         *activeSource == kSwitchLocalSavesIndexPath) {
-        return UiText(state, "Catálogo sincronizado do emulador", "Emulator synchronized catalog");
+        return UiString(state, "ui.source.emulator_sync", u8"Cat?logo sincronizado do emulador", "Emulator synchronized catalog");
     }
     if (*activeSource == kCatalogCachePath || *activeSource == kCheatsIndexCachePath || *activeSource == kSavesIndexCachePath) {
-        return UiText(state, "Cache local do catálogo", "Local catalog cache");
+        return UiString(state, "ui.source.cache", u8"Cache local do cat?logo", "Local catalog cache");
     }
     if (activeSource->rfind("http://", 0) == 0 || activeSource->rfind("https://", 0) == 0) {
-        return UiText(state, "Catálogo online", "Online catalog");
+        return UiString(state, "ui.source.online", u8"Cat?logo online", "Online catalog");
     }
-    return UiText(state, "Catálogo local", "Local catalog");
+    return UiString(state, "ui.source.local", u8"Cat?logo local", "Local catalog");
 }
 
 std::string SectionLabelLocalized(const AppState& state, ContentSection section) {
-    if (!UseEnglish(state)) {
-        switch (section) {
-            case ContentSection::Translations:
-                return "Traduções & Dublagens";
-            case ContentSection::ModsTools:
-                return "Mods";
-            case ContentSection::Cheats:
-                return "Trapaças";
-            case ContentSection::SaveGames:
-                return "Jogos Salvos";
-            case ContentSection::About:
-            default:
-                return "Sobre a M.I.L.";
-        }
-    }
-
     switch (section) {
         case ContentSection::Translations:
-            return "Translations & Dubs";
+            return UiString(state, "ui.section.translations", u8"Tradu??es & Dublagens", "Translations & Dubs");
         case ContentSection::ModsTools:
-            return "Mods";
+            return UiString(state, "ui.section.mods", "Mods", "Mods");
         case ContentSection::Cheats:
-            return "Cheats";
+            return UiString(state, "ui.section.cheats", u8"Trapa?as", "Cheats");
         case ContentSection::SaveGames:
-            return "Save Games";
+            return UiString(state, "ui.section.saves", "Jogos Salvos", "Save Games");
         case ContentSection::About:
         default:
-            return "About M.I.L.";
+            return UiString(state, "ui.section.about", "Sobre a M.I.L.", "About M.I.L.");
     }
 }
 
 std::string MakeCompatibilitySummaryLocalized(const AppState& state, const CatalogEntry& entry, const InstalledTitle* title) {
-    if (!UseEnglish(state)) {
-        return MakeCompatibilitySummary(entry, title);
-    }
     const std::string variantSummary = EntryHasVariants(entry) ? VariantListSummary(entry) : std::string();
     if (!title) {
         if (!variantSummary.empty()) {
-            return "Game not found on console/emulator. Available variants: " + variantSummary;
+            return UiText(state, u8"Jogo n?o encontrado no console/emulador. Variantes dispon?veis: ", "Game not found on console/emulator. Available variants: ") + variantSummary;
         }
-        return "Game not found on console/emulator.";
+        return UiText(state, u8"Jogo n?o encontrado no console/emulador.", "Game not found on console/emulator.");
     }
     if (title->displayVersion.empty()) {
         if (!variantSummary.empty()) {
-            return "Installed game version unavailable. Available variants: " + variantSummary;
+            return UiText(state, u8"Vers?o do jogo indispon?vel. Variantes dispon?veis: ", "Installed game version unavailable. Available variants: ") + variantSummary;
         }
-        return "Installed game version unavailable.";
+        return UiText(state, u8"Vers?o do jogo indispon?vel.", "Installed game version unavailable.");
     }
     if (EntryMatchesInstalledVersion(entry, title)) {
-        return "Compatible with installed version: " + title->displayVersion;
+        return UiText(state, u8"Compat?vel com a vers?o instalada: ", "Compatible with installed version: ") + title->displayVersion;
     }
 
-    std::string message = "Warning: package is outside the supported range for the installed game (" + title->displayVersion + ").";
+    std::string message = UiText(state,
+                                 u8"Aten??o: pacote fora da faixa suportada para o jogo instalado (",
+                                 "Warning: package is outside the supported range for the installed game (") +
+                          title->displayVersion + ").";
     if (!variantSummary.empty()) {
-        message += " Available variants: " + variantSummary + ".";
+        message += UiText(state, u8" Variantes dispon?veis: ", " Available variants: ") + variantSummary + ".";
     } else {
         if (!entry.compatibility.minGameVersion.empty()) {
-            message += " Min: " + entry.compatibility.minGameVersion + ".";
+            message += UiText(state, " Min: ", " Min: ") + entry.compatibility.minGameVersion + ".";
         }
         if (!entry.compatibility.maxGameVersion.empty()) {
-            message += " Max: " + entry.compatibility.maxGameVersion + ".";
+            message += UiText(state, " Max: ", " Max: ") + entry.compatibility.maxGameVersion + ".";
         }
         if (!entry.compatibility.exactGameVersions.empty()) {
-            message += " Exact: ";
+            message += UiText(state, u8" Exatas: ", " Exact: ");
             for (std::size_t index = 0; index < entry.compatibility.exactGameVersions.size(); ++index) {
                 if (index > 0) {
                     message += ", ";
@@ -4286,13 +4362,13 @@ void DrawSidebar(gfx::Canvas& canvas,
     gfx::DrawText(canvas,
                   x + 20,
                   y + 16,
-                  UiText(state, "Gerenciador M.I.L.", "M.I.L. Manager"),
+                  UiString(state, "ui.app.title", "Gerenciador M.I.L.", "M.I.L. Manager"),
                   palette.headerText,
                   2);
     gfx::DrawText(canvas,
                   x + 21,
                   y + 16,
-                  UiText(state, "Gerenciador M.I.L.", "M.I.L. Manager"),
+                  UiString(state, "ui.app.title", "Gerenciador M.I.L.", "M.I.L. Manager"),
                   palette.headerText,
                   2);
 
@@ -4330,7 +4406,7 @@ void DrawSidebar(gfx::Canvas& canvas,
                           kSidebarCardWidth,
                           kSidebarActionCardHeight,
                           "A",
-                          selectionInstalled ? UiText(state, "Remover", "Remove") : UiText(state, "Instalar", "Install"),
+                          selectionInstalled ? UiString(state, "ui.button.remove", "Remover", "Remove") : UiString(state, "ui.button.install", "Instalar", "Install"),
                           false,
                           state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::ActionButton);
     DrawSidebarActionCard(canvas,
@@ -4340,7 +4416,7 @@ void DrawSidebar(gfx::Canvas& canvas,
                           kSidebarCardWidth,
                           kSidebarActionCardHeight,
                           "+",
-                          UiText(state, "Pesquisar", "Search"),
+                          UiString(state, "ui.button.search", "Pesquisar", "Search"),
                           false,
                           state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::SearchButton);
     DrawSidebarActionCard(canvas,
@@ -4350,7 +4426,7 @@ void DrawSidebar(gfx::Canvas& canvas,
                           kSidebarCardWidth,
                           kSidebarActionCardHeight,
                           "X",
-                          UiText(state, "Atualizar", "Refresh"),
+                          UiString(state, "ui.button.refresh", "Atualizar", "Refresh"),
                           false,
                           state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::RefreshButton);
     DrawSidebarActionCard(canvas,
@@ -4360,7 +4436,7 @@ void DrawSidebar(gfx::Canvas& canvas,
                           kSidebarCardWidth,
                           kSidebarActionCardHeight,
                           "Y",
-                          UiText(state, "Ordenar", "Sort"),
+                          UiString(state, "ui.button.sort", "Ordenar", "Sort"),
                           false,
                           state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::SortButton);
     DrawSidebarActionCard(canvas,
@@ -4370,7 +4446,7 @@ void DrawSidebar(gfx::Canvas& canvas,
                           kSidebarCardWidth,
                           kSidebarActionCardHeight,
                           "L",
-                          UiText(state, "Idioma", "Language"),
+                          UiString(state, "ui.button.language", "Idioma", "Language"),
                           false,
                           state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::LanguageButton);
     DrawSidebarActionCard(canvas,
@@ -4380,7 +4456,7 @@ void DrawSidebar(gfx::Canvas& canvas,
                           kSidebarCardWidth,
                           kSidebarActionCardHeight,
                           "R",
-                          UiText(state, "Tema", "Theme"),
+                          UiString(state, "ui.button.theme", "Tema", "Theme"),
                           false,
                           state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::ThemeButton);
     DrawSidebarStatusCard(canvas,
@@ -4389,27 +4465,28 @@ void DrawSidebar(gfx::Canvas& canvas,
                           kSidebarStatusCardY,
                           kSidebarCardWidth,
                           kSidebarStatusCardHeight,
-                          (UseEnglish(state) ? "Games " : "Jogos ") + std::to_string(state.installedTitles.size()));
+                          UiString(state, "ui.status.games_prefix", "Jogos ", "Games ") + std::to_string(state.installedTitles.size()));
     DrawSidebarStatusCard(canvas,
                           palette,
                           kSidebarInfoX + kSidebarCardWidth + kSidebarCardGap,
                           kSidebarStatusCardY,
                           kSidebarCardWidth,
                           kSidebarStatusCardHeight,
-                          (UseEnglish(state) ? "Packages " : "Pacotes ") + std::to_string(state.receipts.size()));
+                          UiString(state, "ui.status.packages_prefix", "Pacotes ", "Packages ") + std::to_string(state.receipts.size()));
 }
 
 void DrawEmptyState(gfx::Canvas& canvas, const AppState& state, int x, int y, int width, int height) {
     const ThemePalette palette = GetThemePalette(state);
     DrawPanel(canvas, x, y, width, height, palette.emptyFill, palette.emptyBorder);
-    gfx::DrawText(canvas, x + 22, y + 22, UiText(state, u8"Nenhum item", "No items"), palette.primaryText, 2);
+    gfx::DrawText(canvas, x + 22, y + 22, UiString(state, "ui.empty.title", u8"Nenhum item", "No items"), palette.primaryText, 2);
     gfx::DrawTextWrapped(canvas,
                          x + 22,
                          y + 62,
                          width - 44,
-                         UiText(state,
-                                "Ainda não há conteúdo disponível para esta seção no catálogo atual.",
-                                "There is no content available for this section in the current catalog."),
+                         UiString(state,
+                                  "ui.empty.default",
+                                  u8"Ainda n?o h? conte?do dispon?vel para esta se??o no cat?logo atual.",
+                                  "There is no content available for this section in the current catalog."),
                          palette.mutedText,
                          1,
                          4);
@@ -4418,14 +4495,15 @@ void DrawEmptyState(gfx::Canvas& canvas, const AppState& state, int x, int y, in
 void DrawCheatsEmptyState(gfx::Canvas& canvas, const AppState& state, int x, int y, int width, int height) {
     const ThemePalette palette = GetThemePalette(state);
     DrawPanel(canvas, x, y, width, height, palette.emptyFill, palette.emptyBorder);
-    gfx::DrawText(canvas, x + 22, y + 24, UiText(state, u8"Nenhum item", "No items"), palette.primaryText, 2);
+    gfx::DrawText(canvas, x + 22, y + 24, UiString(state, "ui.empty.title", u8"Nenhum item", "No items"), palette.primaryText, 2);
     gfx::DrawTextWrapped(canvas,
                          x + 22,
                          y + 68,
                          width - 44,
-                         UiText(state,
-                                u8"Títulos não identificados. Utilize a Pesquisa para localizar a trapaça desejada.",
-                                "Titles not identified. Use Search to find the desired cheats."),
+                         UiString(state,
+                                  "ui.empty.cheats",
+                                  u8"T?tulos n?o identificados. Utilize a Pesquisa para localizar a trapa?a desejada.",
+                                  "Titles not identified. Use Search to find the desired cheats."),
                          palette.mutedText,
                          1,
                          4);
@@ -4434,14 +4512,15 @@ void DrawCheatsEmptyState(gfx::Canvas& canvas, const AppState& state, int x, int
 void DrawSaveGamesEmptyState(gfx::Canvas& canvas, const AppState& state, int x, int y, int width, int height) {
     const ThemePalette palette = GetThemePalette(state);
     DrawPanel(canvas, x, y, width, height, palette.emptyFill, palette.emptyBorder);
-    gfx::DrawText(canvas, x + 22, y + 22, UiText(state, u8"Nenhum item", "No items"), palette.primaryText, 2);
+    gfx::DrawText(canvas, x + 22, y + 22, UiString(state, "ui.empty.title", u8"Nenhum item", "No items"), palette.primaryText, 2);
     gfx::DrawTextWrapped(canvas,
                          x + 22,
                          y + 62,
                          width - 44,
-                         UiText(state,
-                                u8"Títulos não identificados. Utilize a Pesquisa para localizar o save desejado.",
-                                "Titles not identified. Use Search to find the desired save."),
+                         UiString(state,
+                                  "ui.empty.saves",
+                                  u8"T?tulos n?o identificados. Utilize a Pesquisa para localizar o save desejado.",
+                                  "Titles not identified. Use Search to find the desired save."),
                          palette.mutedText,
                          1,
                          4);
@@ -4471,8 +4550,8 @@ void DrawEntryList(gfx::Canvas& canvas,
     DrawTextWithBulletSeparator(canvas,
                                 x + 20,
                                 y + 52,
-                                std::string(UiText(state, "Fonte: ", "Source: ")) + GetCatalogSourceLabel(state),
-                                std::string(UiText(state, "Ordem: ", "Sort: ")) + SortModeLabel(state, state.sortMode),
+                                std::string(UiString(state, "ui.label.source_prefix", "Fonte: ", "Source: ")) + GetCatalogSourceLabel(state),
+                                std::string(UiString(state, "ui.label.sort_prefix", "Ordem: ", "Sort: ")) + SortModeLabel(state, state.sortMode),
                                 palette.headerMetaText,
                                 1);
 
@@ -4593,8 +4672,8 @@ void DrawDetails(gfx::Canvas& canvas,
     if (state.section == ContentSection::About) {
         gfx::FillRect(canvas, x, y, width, 84, palette.contentHeaderFill);
         gfx::DrawRect(canvas, x, y, width, 84, palette.detailsBorder);
-        gfx::DrawText(canvas, x + 20, y + 16, UiText(state, "Sobre a M.I.L.", "About M.I.L."), palette.headerText, 2);
-        gfx::DrawText(canvas, x + 21, y + 16, UiText(state, "Sobre a M.I.L.", "About M.I.L."), palette.headerText, 2);
+        gfx::DrawText(canvas, x + 20, y + 16, UiString(state, "ui.section.about", "Sobre a M.I.L.", "About M.I.L."), palette.headerText, 2);
+        gfx::DrawText(canvas, x + 21, y + 16, UiString(state, "ui.section.about", "Sobre a M.I.L.", "About M.I.L."), palette.headerText, 2);
         gfx::DrawTextWrapped(canvas,
                              x + 20,
                              y + 96,
@@ -4609,7 +4688,7 @@ void DrawDetails(gfx::Canvas& canvas,
                              x + 20,
                              y + 180,
                              width - 40,
-                             std::string(UiText(state, "Fonte ativa: ", "Active source: ")) + GetCatalogSourceLabel(state),
+                             std::string(UiString(state, "ui.about.active_source", "Fonte ativa: ", "Active source: ")) + GetCatalogSourceLabel(state),
                              palette.accentText,
                              1,
                              3);
@@ -4617,7 +4696,7 @@ void DrawDetails(gfx::Canvas& canvas,
                              x + 20,
                              y + 242,
                              width - 40,
-                             std::string(UiText(state, "Ambiente: ", "Environment: ")) +
+                             std::string(UiString(state, "ui.about.environment", "Ambiente: ", "Environment: ")) +
                                  RuntimeEnvironmentLabel(GetRuntimeEnvironment()),
                              palette.accentText,
                              1,
@@ -4626,7 +4705,7 @@ void DrawDetails(gfx::Canvas& canvas,
                              x + 20,
                              y + 284,
                              width - 40,
-                             std::string(UiText(state, "Loader info: ", "Loader info: ")) +
+                             std::string(UiString(state, "ui.about.loader_info", "Loader info: ", "Loader info: ")) +
                                  TruncateText(GetLoaderInfoSummary(), 42),
                              palette.accentText,
                              1,
@@ -4875,7 +4954,7 @@ void DrawInstallConfirmationDialog(gfx::Canvas& canvas, const AppState& state) {
                       buttonWidth,
                       40,
                       "A",
-                      UiText(state, "Sim", "Yes"),
+                      UiString(state, "ui.button.yes", "Sim", "Yes"),
                       true,
                       state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::ConfirmYesButton);
     DrawConfirmButton(canvas,
@@ -4964,7 +5043,7 @@ void DrawVariantSelectionDialog(gfx::Canvas& canvas, const AppState& state) {
                       buttonWidth,
                       kVariantSelectButtonsHeight,
                       "A",
-                      UiText(state, "Instalar", "Install"),
+                      UiString(state, "ui.button.install", "Instalar", "Install"),
                       true,
                       state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::VariantConfirmButton);
     DrawConfirmButton(canvas,
@@ -4975,7 +5054,7 @@ void DrawVariantSelectionDialog(gfx::Canvas& canvas, const AppState& state) {
                       buttonWidth,
                       kVariantSelectButtonsHeight,
                       "B",
-                      UiText(state, "Cancelar", "Cancel"),
+                      UiString(state, "ui.button.cancel", "Cancelar", "Cancel"),
                       false,
                       state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::VariantCancelButton);
 }
@@ -5051,7 +5130,7 @@ void DrawCheatBuildSelectionDialog(gfx::Canvas& canvas, const AppState& state) {
                       buttonWidth,
                       kCheatBuildButtonsHeight,
                       "A",
-                      UiText(state, "Instalar", "Install"),
+                      UiString(state, "ui.button.install", "Instalar", "Install"),
                       true,
                       state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::CheatBuildConfirmButton);
     DrawConfirmButton(canvas,
@@ -5062,7 +5141,7 @@ void DrawCheatBuildSelectionDialog(gfx::Canvas& canvas, const AppState& state) {
                       buttonWidth,
                       kCheatBuildButtonsHeight,
                       "B",
-                      UiText(state, "Cancelar", "Cancel"),
+                      UiString(state, "ui.button.cancel", "Cancelar", "Cancel"),
                       false,
                       state.touchActive && state.activeTouchTarget.kind == TouchTargetKind::CheatBuildCancelButton);
 }
@@ -5172,7 +5251,7 @@ void RenderAbout(const AppState& state) {
     PrintLine("");
     PrintLine(UiText(state, "Ambiente detectado", "Detected environment"));
     PrintLine(RuntimeEnvironmentLabel(GetRuntimeEnvironment()));
-    PrintLine(std::string(UiText(state, "Loader info: ", "Loader info: ")) + GetLoaderInfoSummary());
+    PrintLine(std::string(UiString(state, "ui.about.loader_info", "Loader info: ", "Loader info: ")) + GetLoaderInfoSummary());
     PrintLine("");
     PrintLine(UiText(state, "Fonte ativa do catálogo", "Active catalog source"));
     PrintLine(GetCatalogSourceLabel(state));
@@ -5217,10 +5296,10 @@ void RenderEntries(const AppState& state, const std::vector<const CatalogEntry*>
         std::string prefix = selected ? "> " : "  ";
         std::string line = prefix + entry.name;
         if (suggested) {
-            line += UseEnglish(state) ? " [SUGGESTED]" : " [SUGERIDO]";
+            line += UiText(state, " [SUGERIDO]", " [SUGGESTED]");
         }
         if (installed) {
-            line += UseEnglish(state) ? " [INSTALLED]" : " [INSTALADO]";
+            line += UiText(state, " [INSTALADO]", " [INSTALLED]");
         }
         PrintLine(line);
     }
@@ -5287,6 +5366,7 @@ void Render(const AppState& state) {
 void ReloadLocalState(AppState& state) {
     std::string configNote;
     state.config = LoadAppConfig(configNote);
+    ReloadLanguageStrings(state);
     state.platformNote = configNote;
 
     std::string receiptsNote;
@@ -5322,7 +5402,8 @@ void CycleLanguage(AppState& state) {
 
     std::string saveError;
     if (SaveAppConfig(state.config, saveError)) {
-        state.statusLine = UseEnglish(state) ? "Language saved to settings.ini" : "Idioma salvo em settings.ini";
+        ReloadLanguageStrings(state);
+        state.statusLine = UiString(state, "ui.status.language_saved", "Idioma salvo em settings.ini", "Language saved to settings.ini");
     } else {
         state.statusLine = saveError;
     }
@@ -5333,7 +5414,7 @@ void CycleTheme(AppState& state) {
 
     std::string saveError;
     if (SaveAppConfig(state.config, saveError)) {
-        state.statusLine = std::string(UiText(state, "Tema alterado para ", "Theme changed to ")) +
+        state.statusLine = std::string(UiString(state, "ui.status.theme_changed", "Tema alterado para ", "Theme changed to ")) +
                            ThemeModeLabelLocalized(state, state.config.theme);
     } else {
         state.statusLine = saveError;
@@ -5886,3 +5967,4 @@ int RunApplication() {
 }
 
 }  // namespace mil
+
