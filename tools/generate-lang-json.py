@@ -91,6 +91,26 @@ def set_nested_value(target: dict, dotted_key: str, value: str) -> None:
     cursor[parts[-1]] = value
 
 
+def flatten_nested_value(value: object, prefix: str, output: dict[str, str]) -> None:
+    if isinstance(value, str):
+        output[prefix] = value
+        return
+    if not isinstance(value, dict):
+        return
+    for key, child in value.items():
+        child_key = f"{prefix}.{key}" if prefix else key
+        flatten_nested_value(child, child_key, output)
+
+
+def load_existing_values(path: Path) -> dict[str, str]:
+    if not path.exists():
+        return {}
+    raw = json.loads(path.read_text(encoding="utf-8"))
+    flattened: dict[str, str] = {}
+    flatten_nested_value(raw, "", flattened)
+    return flattened
+
+
 def collect_strings() -> tuple[dict[str, str], dict[str, str]]:
     text = APP_CPP.read_text(encoding="utf-8")
 
@@ -135,11 +155,12 @@ def collect_strings() -> tuple[dict[str, str], dict[str, str]]:
 
 
 def write_language_file(path: Path, values: dict[str, str]) -> None:
+    existing_values = load_existing_values(path)
     nested: dict[str, object] = {}
     for key in sorted(values):
-        set_nested_value(nested, key, values[key])
+        set_nested_value(nested, key, existing_values.get(key, values[key]))
     path.parent.mkdir(parents=True, exist_ok=True)
-    path.write_text(json.dumps(nested, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
+    path.write_text(json.dumps(nested, ensure_ascii=True, indent=2) + "\n", encoding="utf-8")
 
 
 def main() -> None:

@@ -7,23 +7,23 @@
       "10c641bd": "1 variante"
     },
     "a_install_remove_l_switch_language_r_switch_theme_search_exit": {
-      "a4f5535c": "A instala/remove • L alterna idioma • R alterna tema • + pesquisa • - sai"
+      "a4f5535c": "A instala/remove \u2022 L alterna idioma \u2022 R alterna tema \u2022 + pesquisa \u2022 - sai"
     },
     "active_catalog_source": {
-      "ca0791e9": "Fonte ativa do catálogo"
+      "ca0791e9": "Fonte ativa do cat\u00e1logo"
     },
     "available_variants": {
-      "bf44848c": " Variantes disponíveis: "
+      "bf44848c": " Variantes dispon\u00edveis: "
     },
     "build_mismatch": {
       "1951581c": "Build diferente",
       "5ee09a51": "Build Divergente"
     },
     "build_not_detected": {
-      "cc8a3d29": "Build não detectado"
+      "cc8a3d29": "Build n\u00e3o detectada"
     },
     "build_unknown": {
-      "2ac47a86": "Build Não Detectado"
+      "2ac47a86": "Build desconhecida"
     },
     "builds": {
       "1994c708": "builds"
@@ -32,13 +32,13 @@
       "af9be0a8": "- Cache: sdmc:/switch/mil_manager/cache"
     },
     "catalog_cache_sdmc_switch_mil_manager_cache_index_json": {
-      "40ab74ef": "- Cache do índice: sdmc:/switch/mil_manager/cache/index.json"
+      "40ab74ef": "- Cache do \u00edndice: sdmc:/switch/mil_manager/cache/index.json"
     },
     "catalog_has_no_title_ids_for_local_probing": {
-      "d494d802": "Catálogo sem title IDs para sondagem local."
+      "d494d802": "Cat\u00e1logo sem title IDs para sondagem local."
     },
     "catalog_metadata": {
-      "eedb23a4": "Metadados do catálogo"
+      "eedb23a4": "Metadados do cat\u00e1logo"
     },
     "categories": {
       "e5aa268a": "Categorias: "
@@ -47,22 +47,22 @@
       "8b228494": "Canal: "
     },
     "cheat_depends_on_a_specific_build_confirmation_is_required_to_choose_manually": {
-      "c6a6964a": "Cheat depende de build específico; confirmação necessária para escolher manualmente."
+      "c6a6964a": "Trapa\u00e7a depende de build espec\u00edfica; confirma\u00e7\u00e3o necess\u00e1ria para escolher manualmente."
     },
     "cheat_published_for_detected_build": {
-      "e44c2d24": "Cheat publicado para o build detectado: "
+      "e44c2d24": "Trapa\u00e7a publicada para a build detectada: "
     },
     "choose_another_build_manually": {
-      "50a26258": "Escolher manualmente outro build?"
+      "50a26258": "Escolher manualmente outra build?"
     },
     "choose_cheat_build": {
-      "d7249a92": "Escolha o build do cheat"
+      "d7249a92": "Escolha a build da trapa\u00e7a"
     },
     "choose_how_to_proceed": {
       "50c7ff02": "Escolha como deseja prosseguir."
     },
     "choose_the_desired_build": {
-      "cbfa374d": "Escolha o build desejado."
+      "cbfa374d": "Escolha a build desejada."
     },
     "choose_the_variant_to_install": {
       "b5212728": "Escolha a variante desejada."
@@ -74,25 +74,25 @@
       "8a1085ce": "Comunidade"
     },
     "compatibility_unspecified": {
-      "405326e6": "Compatibilidade não especificada"
+      "405326e6": "Compatibilidade n\u00e3o especificada"
     },
     "compatible_with_installed_version": {
-      "22214859": "Compatível com a versão instalada: "
+      "22214859": "Compat\u00edvel com a vers\u00e3o instalada: "
     },
     "complete": {
       "5ac61a8e": "Completo"
     },
     "configuration_in_sdmc_switch_mil_manager_settings_ini": {
-      "9cb3dccc": "- Configuração em sdmc:/switch/mil_manager/settings.ini"
+      "9cb3dccc": "- Configura\u00e7\u00e3o em sdmc:/switch/mil_manager/settings.ini"
     },
     "console_detected_local_reading_always_enabled_ignoring_scan_mode_off": {
       "ce52efd8": "Console detectado. Leitura local sempre ativa; ignorando scan_mode=off."
     },
     "console_emulator_compatibility_with_service_fallback": {
-      "d8553382": "- Compatibilidade console + emulador por degradação de serviços"
+      "d8553382": "- Compatibilidade console + emulador por degrada\u00e7\u00e3o de servi\u00e7os"
     },
     "continue_with_installation": {
-      "e004a1f3": "Prosseguir com a instalação?"
+      "e004a1f3": "Prosseguir com a instala\u00e7\u00e3o?"
     },
     "controls": {
       "7efc975d": "Controles"
@@ -107,28 +107,28 @@
       "59385180": "Detalhes"
     },
     "detected_build": {
-      "e67940af": "Build detectado: "
+      "e67940af": "Build detectada: "
     },
     "detected_environment": {
       "6910e65d": "Ambiente detectado"
     },
     "directories": {
-      "cbf7a254": "Diretórios"
+      "cbf7a254": "Diret\u00f3rios"
     },
     "done": {
-      "d1933331": "Concluído."
+      "d1933331": "Conclu\u00eddo."
     },
     "downloading_initial_cheats_index": {
-      "cc07c9f3": "Baixando índice inicial de trapaças..."
+      "cc07c9f3": "Baixando \u00edndice inicial de trapa\u00e7as..."
     },
     "downloading_initial_saves_index": {
-      "171384e9": "Baixando índice inicial de saves..."
+      "171384e9": "Baixando \u00edndice inicial de saves..."
     },
     "emulator_import_sdmc_switch_mil_manager_cache_installed_titles_cache_json": {
-      "eed71afd": "- Importação do emulador: sdmc:/switch/mil_manager/cache/installed-titles-cache.json"
+      "eed71afd": "- Importa\u00e7\u00e3o do emulador: sdmc:/switch/mil_manager/cache/installed-titles-cache.json"
     },
     "entry_not_found_for_installation": {
-      "bedb4552": "Entrada não encontrada para instalação."
+      "bedb4552": "Entrada n\u00e3o encontrada para instala\u00e7\u00e3o."
     },
     "event": {
       "65958a57": "Evento"
@@ -146,16 +146,16 @@
       "7aa860e3": "Jogo: "
     },
     "game_build_not_detected_installation_will_require_choosing_a_build_manually": {
-      "7e1b4351": "Build do jogo não detectado. A instalação vai pedir a escolha manual de um build."
+      "7e1b4351": "Build do jogo n\u00e3o detectada. A instala\u00e7\u00e3o vai pedir a escolha manual de uma build."
     },
     "game_not_found_on_console_emulator": {
-      "d0a3c0d4": "Jogo não encontrado no console/emulador."
+      "d0a3c0d4": "Jogo n\u00e3o encontrado no console/emulador."
     },
     "game_not_found_on_console_emulator_available_variants": {
-      "afa8a5d6": "Jogo não encontrado no console/emulador. Variantes disponíveis: "
+      "afa8a5d6": "Jogo n\u00e3o encontrado no console/emulador. Variantes dispon\u00edveis: "
     },
     "game_version": {
-      "9907ed7b": "Versão do jogo: "
+      "9907ed7b": "Vers\u00e3o do jogo: "
     },
     "general": {
       "b50f6487": "Geral"
@@ -164,77 +164,77 @@
       "fc371c54": "Gerado em: "
     },
     "graphics": {
-      "cb56a04c": "Gráficos"
+      "cb56a04c": "Gr\u00e1ficos"
     },
     "homebrew_app_to_list_and_install_translations_mods_cheats_and_save_games": {
-      "90b220a4": "Aplicativo homebrew para listar e instalar traduções, mods, cheats e saves."
+      "90b220a4": "Aplicativo homebrew para listar e instalar tradu\u00e7\u00f5es, modifica\u00e7\u00f5es, trapa\u00e7as e salvamentos."
     },
     "installation_cancelled": {
-      "c8e7c424": "Instalação cancelada."
+      "c8e7c424": "Instala\u00e7\u00e3o cancelada."
     },
     "installed": {
       "4922069d": " [INSTALADO]",
       "7ecbd8af": "Instalado"
     },
     "installed_build": {
-      "51ef0b9f": "Build instalado: "
+      "51ef0b9f": "Build instalada: "
     },
     "installed_content_sdmc_atmosphere_contents_saves_remain_in_sdmc": {
-      "9aa23d48": "- Conteúdo instalado: sdmc:/atmosphere/contents/ (saves continuam em sdmc:/)"
+      "9aa23d48": "- Conte\u00fado instalado: sdmc:/atmosphere/contents/ (salvamentos continuam em sdmc:/)"
     },
     "installed_game_version_unavailable": {
-      "9555d086": "Versão do jogo indisponível."
+      "9555d086": "Vers\u00e3o do jogo indispon\u00edvel."
     },
     "installed_game_version_unavailable_available_variants": {
-      "475f57c2": "Versão do jogo indisponível. Variantes disponíveis: "
+      "475f57c2": "Vers\u00e3o do jogo indispon\u00edvel. Variantes dispon\u00edveis: "
     },
     "installed_locally": {
-      "87133ed9": " • Instalado localmente"
+      "87133ed9": " \u2022 Instalado localmente"
     },
     "installed_titles_cache_json_does_not_contain_a_titles_array": {
       "5c9370d5": "Arquivo installed-titles-cache.json sem array titles."
     },
     "installed_titles_loaded_using_full_scan": {
-      "69e538d5": "Títulos instalados carregados por scan completo."
+      "69e538d5": "T\u00edtulos instalados carregados por scan completo."
     },
     "installing_cheat": {
-      "7a474d34": "Instalando trapaça"
+      "7a474d34": "Instalando trapa\u00e7a"
     },
     "installing_package": {
       "2fbaefa4": "Instalando pacote"
     },
     "invalid_installed_titles_cache_json_file": {
-      "04c8811f": "Arquivo installed-titles-cache.json inválido."
+      "04c8811f": "Arquivo installed-titles-cache.json inv\u00e1lido."
     },
     "language": {
       "28ca238d": "Idioma: "
     },
     "last_update": {
-      "a4763a6d": "Última atualização: "
+      "a4763a6d": "\u00daltima atualiza\u00e7\u00e3o: "
     },
     "left_right_change_focus_up_down_navigate_y_sort_x_refresh": {
-      "fa387e9e": "LEFT/RIGHT muda foco • UP/DOWN navega • Y ordena • X atualiza"
+      "fa387e9e": "LEFT/RIGHT muda foco \u2022 UP/DOWN navega \u2022 Y ordena \u2022 X atualiza"
     },
     "list": {
       "2d2f0089": "Lista"
     },
     "load_a_catalog_or_change_section_to_view_package_details": {
-      "3275a4dd": "Carregue um catálogo ou troque de seção para ver os detalhes do pacote selecionado."
+      "3275a4dd": "Carregue um cat\u00e1logo ou troque de se\u00e7\u00e3o para ver os detalhes do pacote selecionado."
     },
     "loading_cheats": {
-      "79ce7368": "Carregando trapaças"
+      "79ce7368": "Carregando trapa\u00e7as"
     },
     "loading_saves": {
-      "e9c8ad5c": "Carregando saves"
+      "e9c8ad5c": "Carregando salvamentos"
     },
     "manager_dedicated_to_translations_dubs_mods_cheats_and_saves_for_both_real_switch_and_ryujinx": {
-      "8b2b4051": "Gerenciador dedicado a traduções, dublagens, mods, cheats e saves para Switch real e Ryujinx."
+      "8b2b4051": "Gerenciador dedicado a tradu\u00e7\u00f5es, dublagens, modifica\u00e7\u00f5es, trapa\u00e7as e salvamentos para Nintendo Switch."
     },
     "matching_build": {
-      "d0b31b92": "Mesmo Build"
+      "d0b31b92": "Mesma Build"
     },
     "matching_version": {
-      "5100aaab": "Mesma Versão"
+      "5100aaab": "Mesma Vers\u00e3o"
     },
     "max": {
       "5f63ecc6": " Max: "
@@ -249,59 +249,59 @@
       "2c56542e": "Modificado"
     },
     "more_than_one_cheat_set_is_available_for_the_detected_build": {
-      "da9994b8": "Mais de um conjunto de cheats está disponível para o build detectado ("
+      "da9994b8": "Mais de um conjunto de trapa\u00e7as est\u00e1 dispon\u00edvel para a build detectada ("
     },
     "more_than_one_variant_is_compatible_with_the_detected_game_version": {
-      "258d30f7": "Mais de uma variante é compatível com a versão detectada ("
+      "258d30f7": "Mais de uma variante \u00e9 compat\u00edvel com a vers\u00e3o detectada ("
     },
     "name": {
       "168d7fd6": "Nome: "
     },
     "no": {
-      "9afa1722": "Não"
+      "9afa1722": "N\u00e3o"
     },
     "no_cheat_build_selected": {
-      "4024bee6": "Nenhum build de cheat selecionado."
+      "4024bee6": "Nenhuma build de trapa\u00e7a selecionada."
     },
     "no_cheat_file_is_available_for_this_build": {
-      "2b9f750f": "Nenhum arquivo de cheat disponível para este build."
+      "2b9f750f": "Nenhum arquivo de trapa\u00e7a dispon\u00edvel para esta build."
     },
     "no_cheat_matches_the_detected_build": {
-      "bf51df73": "Nenhum cheat coincide com o build detectado ("
+      "bf51df73": "Nenhuma trapa\u00e7a coincide com a build detectada ("
     },
     "no_compatible_or_selectable_variant_was_found": {
-      "af2ceba1": "Nenhuma variante compatível ou selecionável foi encontrada."
+      "af2ceba1": "Nenhuma variante compat\u00edvel ou selecion\u00e1vel foi encontrada."
     },
     "no_download_is_available_for_this_entry_variant": {
-      "10dfcbe3": "Nenhum download disponível para esta entrada/variante."
+      "10dfcbe3": "Nenhum download dispon\u00edvel para esta entrada/variante."
     },
     "no_items_available_in_this_section": {
-      "8523cf74": "Nenhum item disponível nesta seção."
+      "8523cf74": "Nenhum item dispon\u00edvel nesta se\u00e7\u00e3o."
     },
     "no_published_cheat_for_detected_build": {
-      "a61ccf7c": "Nenhum cheat publicado para o build detectado: "
+      "a61ccf7c": "Nenhuma trapa\u00e7a publicada para a build detectada: "
     },
     "no_published_cheats_index_was_found_for_this_title": {
-      "cf3827fb": "Nenhum índice de cheats publicado foi encontrado para este título."
+      "cf3827fb": "Nenhum \u00edndice de trapa\u00e7as publicado foi encontrado para este t\u00edtulo."
     },
     "no_published_cheats_were_found_for_this_title": {
-      "d3e7c720": "Nenhum cheat publicado foi encontrado para este título."
+      "d3e7c720": "Nenhuma trapa\u00e7a publicada foi encontrada para este t\u00edtulo."
     },
     "no_variant_matches_the_detected_game_version": {
-      "92c0b4b0": "Nenhuma variante coincide exatamente com a versão detectada ("
+      "92c0b4b0": "Nenhuma variante coincide exatamente com a vers\u00e3o detectada ("
     },
     "no_variant_selected": {
       "4dfcca0b": "Nenhuma variante selecionada."
     },
     "not_installed": {
-      "3c7ba6b7": " • Não instalado",
-      "41e6994d": "Não Instalado"
+      "3c7ba6b7": " \u2022 N\u00e3o instalado",
+      "41e6994d": "N\u00e3o Instalado"
     },
     "nsinitialize_failed_emulator_or_ns_service_unavailable": {
-      "b2fd905f": "nsInitialize falhou. Emulador ou serviço NS indisponível."
+      "b2fd905f": "nsInitialize falhou. Emulador ou servi\u00e7o NS indispon\u00edvel."
     },
     "nsinitialize_failed_ns_service_unavailable": {
-      "62e11972": "nsInitialize falhou. Serviço NS indisponível."
+      "62e11972": "nsInitialize falhou. Servi\u00e7o NS indispon\u00edvel."
     },
     "nslistapplicationrecord_failed_in_full_mode": {
       "bc79193c": "nsListApplicationRecord falhou no modo full."
@@ -310,10 +310,10 @@
       "70a64cc4": "Pacote: "
     },
     "package_version": {
-      "dec16f48": "Versão do pacote: "
+      "dec16f48": "Vers\u00e3o do pacote: "
     },
     "published_builds": {
-      "3cfed320": "Builds publicados: "
+      "3cfed320": "Builds publicadas: "
     },
     "published_variants": {
       "d62b33df": "Variantes publicadas: "
@@ -322,7 +322,7 @@
       "f13325c4": "Objetivo"
     },
     "reading_installed_titles": {
-      "d4610aba": "Lendo títulos instalados..."
+      "d4610aba": "Lendo t\u00edtulos instalados..."
     },
     "receipts_sdmc_switch_mil_manager_receipts": {
       "3e53671e": "- Recibos: sdmc:/switch/mil_manager/receipts"
@@ -334,10 +334,10 @@
       "a022338d": "Recarregando dados locais..."
     },
     "remote_json_catalog_with_automatic_local_cache": {
-      "06d06979": "- Catálogo remoto em JSON com cache local automático"
+      "06d06979": "- Cat\u00e1logo remoto em JSON com cache local autom\u00e1tico"
     },
     "revision": {
-      "5d038f7b": "Revisão: "
+      "5d038f7b": "Revis\u00e3o: "
     },
     "search": {
       "7392a631": "Pesquisa: "
@@ -346,22 +346,22 @@
       "d38a65de": "Pesquisar por nome, ID ou build"
     },
     "search_by_name_or_title_id": {
-      "95666cd5": "Pesquisar por nome ou ID do título"
+      "95666cd5": "Pesquisar por nome ou ID do t\u00edtulo"
     },
     "search_cleared": {
       "a30ec4b0": "Pesquisa limpa."
     },
     "section": {
-      "f071a7ea": "Seção: "
+      "f071a7ea": "Se\u00e7\u00e3o: "
     },
     "select_the_cheat_build_manually_for_this_title": {
-      "03b25ff7": "Selecione manualmente o build de cheats para este título."
+      "03b25ff7": "Selecione manualmente a build de trapa\u00e7as para este t\u00edtulo."
     },
     "select_which_package_variant_should_be_installed_for_this_title": {
-      "4a970c5f": "Selecione a variante do pacote para instalar neste título."
+      "4a970c5f": "Selecione a variante do pacote para instalar neste t\u00edtulo."
     },
     "sort_mode": {
-      "4d92de4f": "Ordenação: "
+      "4d92de4f": "Ordena\u00e7\u00e3o: "
     },
     "source": {
       "5222954e": "Origem: ",
@@ -377,81 +377,81 @@
       "0ac760ab": " [SUGERIDO]"
     },
     "the_detected_game_version_differs_from_the_package_compatibility": {
-      "f33b4cba": "A versão detectada do jogo é diferente da compatível com o pacote ("
+      "f33b4cba": "A vers\u00e3o detectada do jogo \u00e9 diferente da compat\u00edvel com o pacote ("
     },
     "the_emulator_library_is_not_visible_to_homebrew_sync_titles_to_sdmc_switch_mil_manager_cache_installed_titles_cache_json": {
-      "a5903300": "Biblioteca do emulador não fica visível ao homebrew. Sincronize os títulos para sdmc:/switch/mil_manager/cache/installed-titles-cache.json."
+      "a5903300": "Biblioteca do emulador n\u00e3o fica vis\u00edvel ao homebrew. Sincronize os t\u00edtulos para sdmc:/switch/mil_manager/cache/installed-titles-cache.json."
     },
     "the_game_s_build_id_could_not_be_detected_choose_a_cheat_build_manually": {
-      "d29df050": "O build ID do jogo não pôde ser detectado. Escolher manualmente um build de cheats?"
+      "d29df050": "A build ID do jogo n\u00e3o p\u00f4de ser detectada. Escolher manualmente uma build de trapa\u00e7as?"
     },
     "the_game_s_build_id_was_not_detected_choose_the_cheat_build_manually": {
-      "f2bb47de": "O build ID do jogo não foi detectado. Escolha manualmente o build de cheats."
+      "f2bb47de": "A build ID do jogo n\u00e3o foi detectada. Escolha manualmente a build de trapa\u00e7as."
     },
     "the_game_version_could_not_be_detected_continue_with_installation": {
-      "7996cd53": "A versão do jogo não pôde ser detectada. Prosseguir com a instalação?"
+      "7996cd53": "A vers\u00e3o do jogo n\u00e3o p\u00f4de ser detectada. Prosseguir com a instala\u00e7\u00e3o?"
     },
     "the_game_version_was_not_detected_choose_the_package_variant_manually": {
-      "669d0c11": "A versão do jogo não foi detectada. Escolha manualmente a variante do pacote."
+      "669d0c11": "A vers\u00e3o do jogo n\u00e3o foi detectada. Escolha manualmente a variante do pacote."
     },
     "the_title_was_not_detected_on_the_console_emulator_choose_a_cheat_build_manually": {
-      "70a68644": "O título não foi detectado no console/emulador. Escolher manualmente um build de cheats?"
+      "70a68644": "O t\u00edtulo n\u00e3o foi detectado no console/emulador. Escolher manualmente uma build de trapa\u00e7as?"
     },
     "the_title_was_not_detected_on_the_console_emulator_continue_with_installation": {
-      "1c4448c4": "O título não foi detectado no console/emulador. Prosseguir com a instalação?"
+      "1c4448c4": "O t\u00edtulo n\u00e3o foi detectado no console/emulador. Prosseguir com a instala\u00e7\u00e3o?"
     },
     "there_are_no_published_cheats_for_the_detected_build": {
-      "63565d60": "Não há cheats publicados para o build detectado ("
+      "63565d60": "N\u00e3o h\u00e1 trapa\u00e7as publicadas para a build detectada ("
     },
     "this_package_does_not_specify_compatible_game_versions_continue_with_installation": {
-      "4e402b29": "O pacote não possui versão compatível especificada. Prosseguir com a instalação?"
+      "4e402b29": "O pacote n\u00e3o possui vers\u00e3o compat\u00edvel especificada. Prosseguir com a instala\u00e7\u00e3o?"
     },
     "title_id": {
-      "d8311ae0": "ID Título: "
+      "d8311ae0": "ID T\u00edtulo: "
     },
     "title_not_detected": {
-      "ebfe9db1": "Título não detectado"
+      "ebfe9db1": "T\u00edtulo n\u00e3o detectado"
     },
     "title_not_detected_on_the_console_emulator_installation_will_require_choosing_a_build_manually": {
-      "3e173064": "Título não detectado no console/emulador. A instalação vai pedir a escolha manual de um build."
+      "3e173064": "T\u00edtulo n\u00e3o detectado no console/emulador. A instala\u00e7\u00e3o vai pedir a escolha manual de uma build."
     },
     "titles_detected_by_catalog_probing": {
-      "a0c556e8": "Títulos detectados por sondagem do catálogo."
+      "a0c556e8": "T\u00edtulos detectados por sondagem do cat\u00e1logo."
     },
     "titles_imported_from_installed_titles_cache_json": {
-      "42f4277f": "Títulos importados de installed-titles-cache.json."
+      "42f4277f": "T\u00edtulos importados de installed-titles-cache.json."
     },
     "unavailable": {
-      "a0de08a1": "não disponível"
+      "a0de08a1": "n\u00e3o dispon\u00edvel"
     },
     "unlocked": {
       "1f997ffd": "Desbloqueado"
     },
     "updating_cheats_index_and_cache": {
-      "f49bbc38": "Atualizando índice e cache de trapaças..."
+      "f49bbc38": "Atualizando \u00edndice e cache de trapa\u00e7as..."
     },
     "updating_saves_index_and_cache": {
-      "c42fdf1e": "Atualizando índice e cache de saves..."
+      "c42fdf1e": "Atualizando \u00edndice e cache de salvamentos..."
     },
     "variants": {
       "8b151e55": "variantes",
       "e4869171": "Variantes: "
     },
     "version_mismatch": {
-      "193891a4": "Versão Divergente",
-      "9d4a7de4": "Versão divergente"
+      "193891a4": "Vers\u00e3o Divergente",
+      "9d4a7de4": "Vers\u00e3o divergente"
     },
     "version_not_detected": {
-      "0976c9ee": "Versão não detectada"
+      "0976c9ee": "Vers\u00e3o n\u00e3o detectada"
     },
     "version_unknown": {
-      "91eaf9f7": "Versão Não Detectada"
+      "91eaf9f7": "Vers\u00e3o N\u00e3o Detectada"
     },
     "warning_package_is_outside_the_supported_range_for_the_installed_game": {
-      "66207a30": "Atenção: pacote fora da faixa suportada para o jogo instalado ("
+      "66207a30": "Aten\u00e7\u00e3o: pacote fora da faixa suportada para o jogo instalado ("
     },
     "zip_installation_to_sdmc_atmosphere_contents_for_mods_translations_and_cheats": {
-      "80d3253c": "- Instalação por ZIP em sdmc:/atmosphere/contents/ para mods, traduções e cheats"
+      "80d3253c": "- Instala\u00e7\u00e3o por ZIP em sdmc:/atmosphere/contents/ para modifica\u00e7\u00f5es, tradu\u00e7\u00f5es e trapa\u00e7as"
     }
   },
   "ui": {
@@ -475,16 +475,16 @@
       "yes": "Sim"
     },
     "content": {
-      "cheat": "Trapaça",
+      "cheat": "Trapa\u00e7a",
       "dubbing": "Dublagem",
-      "mod": "Mod",
-      "save": "Save",
-      "translation": "Tradução"
+      "mod": "Modifica\u00e7\u00e3o",
+      "save": "Salvamento",
+      "translation": "Tradu\u00e7\u00e3o"
     },
     "empty": {
-      "cheats": "Títulos não identificados. Utilize a Pesquisa para localizar a trapaça desejada.",
-      "default": "Ainda não há conteúdo disponível para esta seção no catálogo atual.",
-      "saves": "Títulos não identificados. Utilize a Pesquisa para localizar o save desejado.",
+      "cheats": "T\u00edtulos n\u00e3o identificados. Utilize a Pesquisa para localizar a trapa\u00e7a desejada.",
+      "default": "Ainda n\u00e3o h\u00e1 conte\u00fado dispon\u00edvel para esta se\u00e7\u00e3o no cat\u00e1logo atual.",
+      "saves": "T\u00edtulos n\u00e3o identificados. Utilize a Pesquisa para localizar o salvamento desejado.",
       "title": "Nenhum item"
     },
     "label": {
@@ -494,22 +494,22 @@
     "missing_key": "[[chave ausente]]",
     "section": {
       "about": "Sobre a M.I.L.",
-      "cheats": "Trapaças",
-      "mods": "Mods",
+      "cheats": "Trapa\u00e7as",
+      "mods": "Modifica\u00e7\u00f5es",
       "saves": "Jogos Salvos",
-      "translations": "Traduções & Dublagens"
+      "translations": "Tradu\u00e7\u00f5es & Dublagens"
     },
     "sort": {
       "name": "Nome",
       "recent": "Recentes",
-      "recommended": "Relevância"
+      "recommended": "Relev\u00e2ncia"
     },
     "source": {
-      "cache": "Cache local do catálogo",
-      "emulator_sync": "Catálogo sincronizado do emulador",
-      "local": "Catálogo local",
+      "cache": "Cache local do cat\u00e1logo",
+      "emulator_sync": "Cat\u00e1logo sincronizado do emulador",
+      "local": "Cat\u00e1logo local",
       "none": "Nenhuma fonte ativa",
-      "online": "Catálogo online"
+      "online": "Cat\u00e1logo online"
     },
     "status": {
       "games_prefix": "Jogos ",

@@ -238,10 +238,15 @@ bool LoadLanguageStringsFromFile(const std::string& path,
                                  std::unordered_map<std::string, std::string>& output,
                                  std::string& error) {
     output.clear();
-    const std::string json = ReadTextFile(path);
+    std::string json = ReadTextFile(path);
     if (json.empty()) {
         error = "Language file not found.";
         return false;
+    }
+    if (json.size() >= 3 && static_cast<unsigned char>(json[0]) == 0xEF &&
+        static_cast<unsigned char>(json[1]) == 0xBB &&
+        static_cast<unsigned char>(json[2]) == 0xBF) {
+        json.erase(0, 3);
     }
 
     picojson::value root;
@@ -4975,7 +4980,7 @@ void DrawVariantSelectionDialog(gfx::Canvas& canvas, const AppState& state) {
         return;
     }
 
-    const CatalogEntry* entry = FindCatalogEntryById(state.catalog, state.variantSelectEntryId);
+    const CatalogEntry* entry = FindVisibleEntryById(state, state.variantSelectEntryId);
     if (entry == nullptr) {
         return;
     }
@@ -5502,7 +5507,7 @@ void ConfirmPendingInstall(AppState& state) {
 }
 
 void ConfirmSelectedVariantInstall(AppState& state) {
-    const CatalogEntry* entry = FindCatalogEntryById(state.catalog, state.variantSelectEntryId);
+    const CatalogEntry* entry = FindVisibleEntryById(state, state.variantSelectEntryId);
     if (entry == nullptr) {
         ClearVariantSelection(state);
         state.statusLine = UiText(state, "Entrada não encontrada para instalação.", "Entry not found for installation.");

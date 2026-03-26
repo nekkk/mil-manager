@@ -7,7 +7,7 @@
       "10c641bd": "1 variant"
     },
     "a_install_remove_l_switch_language_r_switch_theme_search_exit": {
-      "a4f5535c": "A install/remove • L switch language • R switch theme • + search • - exit"
+      "a4f5535c": "A install/remove \u2022 L switch language \u2022 R switch theme \u2022 + search \u2022 - exit"
     },
     "active_catalog_source": {
       "ca0791e9": "Active catalog source"
@@ -189,7 +189,7 @@
       "475f57c2": "Installed game version unavailable. Available variants: "
     },
     "installed_locally": {
-      "87133ed9": " • Installed locally"
+      "87133ed9": " \u2022 Installed locally"
     },
     "installed_titles_cache_json_does_not_contain_a_titles_array": {
       "5c9370d5": "installed-titles-cache.json does not contain a titles array."
@@ -213,7 +213,7 @@
       "a4763a6d": "Last update: "
     },
     "left_right_change_focus_up_down_navigate_y_sort_x_refresh": {
-      "fa387e9e": "LEFT/RIGHT change focus • UP/DOWN navigate • Y sort • X refresh"
+      "fa387e9e": "LEFT/RIGHT change focus \u2022 UP/DOWN navigate \u2022 Y sort \u2022 X refresh"
     },
     "list": {
       "2d2f0089": "List"
@@ -294,7 +294,7 @@
       "4dfcca0b": "No variant selected."
     },
     "not_installed": {
-      "3c7ba6b7": " • Not installed",
+      "3c7ba6b7": " \u2022 Not installed",
       "41e6994d": "Not Installed"
     },
     "nsinitialize_failed_emulator_or_ns_service_unavailable": {
