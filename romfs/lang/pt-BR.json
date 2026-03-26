@@ -23,7 +23,7 @@
       "cc8a3d29": "Build n\u00e3o detectada"
     },
     "build_unknown": {
-      "2ac47a86": "Build desconhecida"
+      "2ac47a86": "Build Desconhecida"
     },
     "builds": {
       "1994c708": "builds"
@@ -86,7 +86,7 @@
       "9cb3dccc": "- Configura\u00e7\u00e3o em sdmc:/switch/mil_manager/settings.ini"
     },
     "console_detected_local_reading_always_enabled_ignoring_scan_mode_off": {
-      "ce52efd8": "Console detectado. Leitura local sempre ativa; ignorando scan_mode=off."
+      "ce52efd8": "Console detectado. Leitura local sempre ativa; ignorando busca desativada."
     },
     "console_emulator_compatibility_with_service_fallback": {
       "d8553382": "- Compatibilidade console + emulador por degrada\u00e7\u00e3o de servi\u00e7os"
@@ -195,7 +195,10 @@
       "5c9370d5": "Arquivo installed-titles-cache.json sem array titles."
     },
     "installed_titles_loaded_using_full_scan": {
-      "69e538d5": "T\u00edtulos instalados carregados por scan completo."
+      "69e538d5": "T\u00edtulos instalados carregados por busca completa."
+    },
+    "ui.status.catalog_and_title_search_updated": {
+      "manual": "Cat\u00e1logo e busca de t\u00edtulos atualizados."
     },
     "installing_cheat": {
       "7a474d34": "Instalando trapa\u00e7a"

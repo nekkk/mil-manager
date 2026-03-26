@@ -489,6 +489,7 @@ struct ThemePalette {
 bool EnsureCheatsIndexReady(AppState& state, bool forceRemoteRefresh = false, bool allowRyujinxRemote = false);
 void RefreshDerivedCheatEntries(AppState& state);
 void FilterCheatsIndexToDetectedTitles(AppState& state);
+void PopulateDetectedCheatBuildIds(AppState& state, bool allowNetworkFallback = true);
 bool EntryUsesCheatsIndex(const AppState& state, const CatalogEntry& entry);
 bool EnsureSavesIndexReady(AppState& state, bool forceRemoteRefresh = false, bool allowRyujinxRemote = false);
 void RefreshDerivedSaveEntries(AppState& state);
@@ -762,6 +763,16 @@ std::pair<std::size_t, std::size_t> GetCheatBuildVisibleWindow(const AppState& s
 const InstalledTitle* FindInstalledTitle(const std::vector<InstalledTitle>& titles, const std::string& titleId) {
     const std::string normalized = ToLowerAscii(titleId);
     for (const InstalledTitle& title : titles) {
+        if (ToLowerAscii(title.titleIdHex) == normalized) {
+            return &title;
+        }
+    }
+    return nullptr;
+}
+
+InstalledTitle* FindInstalledTitleMutable(std::vector<InstalledTitle>& titles, const std::string& titleId) {
+    const std::string normalized = ToLowerAscii(titleId);
+    for (InstalledTitle& title : titles) {
         if (ToLowerAscii(title.titleIdHex) == normalized) {
             return &title;
         }
@@ -1162,6 +1173,24 @@ void FilterCheatsIndexToDetectedTitles(AppState& state) {
         state.cheatsIndexFiltered = true;
     } else {
         state.cheatsIndexFiltered = false;
+    }
+}
+
+void PopulateDetectedCheatBuildIds(AppState& state, bool allowNetworkFallback) {
+    if (state.cheatsIndex.titles.empty() || state.installedTitles.empty()) {
+        return;
+    }
+
+    for (InstalledTitle& title : state.installedTitles) {
+        if (!title.buildIdHex.empty()) {
+            continue;
+        }
+        if (FindCheatTitleRecord(state.cheatsIndex, title.titleIdHex) == nullptr) {
+            continue;
+        }
+
+        std::string resolveNote;
+        TryResolveInstalledTitleBuildId(title, allowNetworkFallback, resolveNote);
     }
 }
 
@@ -1897,6 +1926,7 @@ bool LoadCheatsIndex(AppState& state,
         std::string packError;
         EnsureCheatPackCache(state.cheatsIndex, packError, false);
         state.cheatsIndexFiltered = false;
+        PopulateDetectedCheatBuildIds(state, !IsRyujinxGuestEnvironment());
         FilterCheatsIndexToDetectedTitles(state);
         state.activeCheatsSource = path;
         RefreshDerivedCheatEntries(state);
@@ -2001,6 +2031,7 @@ bool LoadCheatsIndex(AppState& state,
             }
             state.cheatsIndex = std::move(remoteIndex);
             state.cheatsIndexFiltered = false;
+            PopulateDetectedCheatBuildIds(state, !IsRyujinxGuestEnvironment());
             FilterCheatsIndexToDetectedTitles(state);
             state.activeCheatsSource = remoteSource;
             RefreshDerivedCheatEntries(state);
@@ -2048,6 +2079,7 @@ bool EnsureCheatsIndexReady(AppState& state, bool forceRemoteRefresh, bool allow
             }
             return LoadCheatsIndex(state, false, true, false, false);
         }
+        PopulateDetectedCheatBuildIds(state, !IsRyujinxGuestEnvironment());
         return true;
     }
 
@@ -2588,7 +2620,7 @@ std::string EntryVersionStatusLabel(const AppState& state, const CatalogEntry& e
     }
     if (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry)) {
         if (installedTitle == nullptr || installedTitle->buildIdHex.empty()) {
-            return UiText(state, "Build Não Detectado", "Build Unknown");
+            return UiString(state, "build_unknown", "Build Desconhecida", "Build Unknown");
         }
         const CheatTitleRecord* cheatTitle = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
         if (cheatTitle != nullptr && FindCheatBuildRecord(*cheatTitle, installedTitle->buildIdHex) != nullptr) {
@@ -3059,7 +3091,7 @@ bool ShouldConfirmInstall(const AppState& state,
         }
 
         if (installedTitle->buildIdHex.empty()) {
-            title = UiText(state, "Build não detectado", "Build not detected");
+            title = UiString(state, "build_unknown", "Build Desconhecida", "Build Unknown");
             message = UiText(state,
                              "O build ID do jogo não pôde ser detectado. Escolher manualmente um build de cheats?",
                              "The game's build ID could not be detected. Choose a cheat build manually?");
@@ -3778,7 +3810,10 @@ std::string LocalizePlatformNote(const AppState& state, const std::string& note)
         return UiText(state, u8"nsListApplicationRecord falhou no modo full.", "nsListApplicationRecord failed in full mode.");
     }
     if (note == "Títulos instalados carregados por scan completo.") {
-        return UiText(state, u8"T?tulos instalados carregados por scan completo.", "Installed titles loaded using full scan.");
+        return UiString(state,
+                        "installed_titles_loaded_using_full_scan",
+                        u8"Títulos instalados carregados por busca completa.",
+                        "Installed titles loaded using full search.");
     }
     if (note == "Catálogo sem title IDs para sondagem local.") {
         return UiText(state, u8"Cat?logo sem title IDs para sondagem local.", "Catalog has no title IDs for local probing.");
@@ -3790,7 +3825,10 @@ std::string LocalizePlatformNote(const AppState& state, const std::string& note)
         return UiText(state, u8"T?tulos detectados por sondagem do cat?logo.", "Titles detected by catalog probing.");
     }
     if (note == u8"Console detectado. Leitura local sempre ativa; ignorando scan_mode=off.") {
-        return UiText(state, u8"Console detectado. Leitura local sempre ativa; ignorando scan_mode=off.", "Console detected. Local reading always enabled; ignoring scan_mode=off.");
+        return UiString(state,
+                        "console_detected_local_reading_always_enabled_ignoring_scan_mode_off",
+                        u8"Console detectado. Leitura local sempre ativa; ignorando busca desativada.",
+                        "Console detected. Local reading always enabled; ignoring disabled search.");
     }
     return note;
 }
@@ -5344,7 +5382,7 @@ void Render(const AppState& state) {
               std::string(UseEnglish(state) ? " • Installed packages: " : " • Pacotes instalados: ") + std::to_string(state.receipts.size()));
     PrintLine(std::string(UiText(state, "Idioma: ", "Language: ")) + std::string(LanguageModeLabel(state.config.language)) +
               std::string(UseEnglish(state) ? " • Theme: " : " • Tema: ") + ThemeModeLabelLocalized(state, state.config.theme) +
-              " • Scan: " + std::string(InstalledTitleScanModeLabel(state.config.scanMode)));
+              std::string(UseEnglish(state) ? " • Search: " : " • Busca: ") + std::string(InstalledTitleScanModeLabel(state.config.scanMode)));
     PrintLine(std::string(UiText(state, "Fonte: ", "Source: ")) + GetCatalogSourceLabel(state));
     PrintLine(state.statusLine);
     if (!state.platformNote.empty()) {
@@ -5622,8 +5660,10 @@ void ActivateTouchTarget(AppState& state, const TouchTarget& target) {
                                 82);
                     EnsureSavesIndexReady(state, allowNetworkRefresh, allowNetworkRefresh);
                 }
-                state.statusLine = UseEnglish(state) ? "Catalog and title scan updated."
-                                                     : "Catálogo e leitura de títulos atualizados.";
+                state.statusLine = UiString(state,
+                                            "ui.status.catalog_and_title_search_updated",
+                                            "Catálogo e busca de títulos atualizados.",
+                                            "Catalog and title search updated.");
             }
             SetProgress(state, UiText(state, u8"Atualizando", "Refreshing"), UiText(state, u8"Concluído.", "Done."), 100);
             ClearProgress(state);
@@ -5949,8 +5989,10 @@ int RunApplication() {
                                 82);
                     EnsureSavesIndexReady(state, allowNetworkRefresh, allowNetworkRefresh);
                 }
-                state.statusLine = UseEnglish(state) ? "Catalog and title scan updated."
-                                                     : "Catálogo e leitura de títulos atualizados.";
+                state.statusLine = UiString(state,
+                                            "ui.status.catalog_and_title_search_updated",
+                                            "Catálogo e busca de títulos atualizados.",
+                                            "Catalog and title search updated.");
             }
             SetProgress(state, UiText(state, u8"Atualizando", "Refreshing"), UiText(state, u8"Concluído.", "Done."), 100);
             ClearProgress(state);

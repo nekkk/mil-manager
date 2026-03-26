@@ -27,6 +27,7 @@ struct PlatformSession {
 bool InitializePlatform(PlatformSession& session, std::string& note);
 void ShutdownPlatform(PlatformSession& session);
 std::vector<InstalledTitle> LoadInstalledTitles(const AppConfig& config, const CatalogIndex* catalog, std::string& note);
+bool TryResolveInstalledTitleBuildId(InstalledTitle& title, bool allowNetworkFallback, std::string& note);
 std::string GetPreferredLanguageCode();
 bool IsEmulatorEnvironment();
 RuntimeEnvironment GetRuntimeEnvironment();

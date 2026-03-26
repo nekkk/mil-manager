@@ -1,8 +1,10 @@
 #include "mil/platform.hpp"
 
+#include <algorithm>
 #include <cstdlib>
 #include <cstring>
 #include <fstream>
+#include <sstream>
 #include <sys/stat.h>
 #include <set>
 #include <vector>
@@ -10,6 +12,7 @@
 #include <switch.h>
 
 #include "mil/config.hpp"
+#include "mil/http.hpp"
 #include "picojson.h"
 
 namespace mil {
@@ -19,6 +22,19 @@ namespace {
 constexpr u32 kFramebufferWidth = 1280;
 constexpr u32 kFramebufferHeight = 720;
 constexpr const char* kInstalledIconCacheDir = "sdmc:/switch/mil_manager/cache/installed-icons/";
+constexpr const char* kBuildIdCacheDir = "sdmc:/switch/mil_manager/cache/build-ids/";
+constexpr const char* kCheatVersionsDirectory =
+    "https://raw.githubusercontent.com/HamletDuFromage/switch-cheats-db/master/versions/";
+
+struct DmntCheatProcessMetadata {
+    u64 process_id;
+    u64 title_id;
+    u8 main_nso_build_id[0x20];
+    u64 main_nso_extents_base;
+    u64 main_nso_extents_size;
+    u64 heap_extents_base;
+    u64 heap_extents_size;
+};
 
 std::string SafeStringCopy(const char* source, std::size_t maxLength) {
     if (!source || maxLength == 0) {
@@ -57,8 +73,83 @@ bool FileExists(const std::string& path) {
     return stat(path.c_str(), &info) == 0 && S_ISREG(info.st_mode);
 }
 
+bool DirectoryExists(const std::string& path) {
+    struct stat info {};
+    return stat(path.c_str(), &info) == 0 && S_ISDIR(info.st_mode);
+}
+
+std::string ReadTextFile(const std::string& path) {
+    std::ifstream input(path, std::ios::binary);
+    if (!input.good()) {
+        return {};
+    }
+    return std::string((std::istreambuf_iterator<char>(input)), std::istreambuf_iterator<char>());
+}
+
+bool WriteTextFile(const std::string& path, const std::string& content) {
+    std::ofstream output(path, std::ios::binary | std::ios::trunc);
+    if (!output.good()) {
+        return false;
+    }
+    output.write(content.data(), static_cast<std::streamsize>(content.size()));
+    return output.good();
+}
+
+std::string BuildIdCachePath(std::uint64_t applicationId) {
+    return std::string(kBuildIdCacheDir) + ToLowerAscii(FormatTitleId(applicationId)) + ".txt";
+}
+
 std::string InstalledIconCachePath(std::uint64_t applicationId) {
     return std::string(kInstalledIconCacheDir) + ToLowerAscii(FormatTitleId(applicationId)) + ".jpg";
+}
+
+std::string FormatBuildIdHex(std::uint64_t value) {
+    std::ostringstream stream;
+    stream.setf(std::ios::hex, std::ios::basefield);
+    stream.width(16);
+    stream.fill('0');
+    stream << std::nouppercase << value;
+    return stream.str();
+}
+
+bool LoadCachedBuildId(std::uint64_t applicationId, std::uint32_t version, std::string& buildIdHex) {
+    const std::string cachePath = BuildIdCachePath(applicationId);
+    std::ifstream input(cachePath);
+    if (!input.good()) {
+        return false;
+    }
+
+    std::string line;
+    std::uint32_t cachedVersion = 0;
+    std::string cachedBuildId;
+    while (std::getline(input, line)) {
+        const std::size_t equalsPos = line.find('=');
+        if (equalsPos == std::string::npos) {
+            continue;
+        }
+        const std::string key = line.substr(0, equalsPos);
+        const std::string value = line.substr(equalsPos + 1);
+        if (key == "version") {
+            cachedVersion = static_cast<std::uint32_t>(std::strtoul(value.c_str(), nullptr, 10));
+        } else if (key == "build_id") {
+            cachedBuildId = ToLowerAscii(value);
+        }
+    }
+
+    if (cachedVersion != version || cachedBuildId.empty()) {
+        return false;
+    }
+    buildIdHex = cachedBuildId;
+    return true;
+}
+
+void SaveCachedBuildId(std::uint64_t applicationId, std::uint32_t version, const std::string& buildIdHex) {
+    EnsureDirectory("sdmc:/switch");
+    EnsureDirectory(kConfigRootDir);
+    EnsureDirectory(kCacheDir);
+    EnsureDirectory(kBuildIdCacheDir);
+    const std::string content = "version=" + std::to_string(version) + "\nbuild_id=" + ToLowerAscii(buildIdHex) + "\n";
+    WriteTextFile(BuildIdCachePath(applicationId), content);
 }
 
 bool CacheInstalledTitleIcon(std::uint64_t applicationId,
@@ -144,6 +235,10 @@ bool IsUnsafeForwarderLikeContext() {
 bool HasImportedTitlesFile() {
     std::ifstream input(kInstalledTitlesCachePath);
     return input.good();
+}
+
+bool HasEdenSdLayoutMarker() {
+    return DirectoryExists("sdmc:/.get") || DirectoryExists("sdmc:/.get/packages") || DirectoryExists("sdmc:/.get/tmp");
 }
 
 const char* GetImportedTitlesPath() {
@@ -469,6 +564,97 @@ bool TryReadTitleMetadata(std::uint64_t applicationId, InstalledTitle& title) {
     return true;
 }
 
+bool TryReadBuildIdFromDmnt(std::uint64_t applicationId, std::string& buildIdHex) {
+    buildIdHex.clear();
+
+    Service dmntcht{};
+    if (R_FAILED(smGetService(&dmntcht, "dmnt:cht"))) {
+        return false;
+    }
+
+    DmntCheatProcessMetadata metadata{};
+    const Result queryResult = serviceDispatch(&dmntcht, 65003);
+    const Result metadataResult = R_SUCCEEDED(queryResult) ? serviceDispatchOut(&dmntcht, 65002, metadata)
+                                                           : queryResult;
+    serviceClose(&dmntcht);
+    if (R_FAILED(metadataResult) || metadata.title_id != applicationId) {
+        return false;
+    }
+
+    std::uint64_t buildValue = 0;
+    std::memcpy(&buildValue, metadata.main_nso_build_id, sizeof(buildValue));
+    buildIdHex = FormatBuildIdHex(__builtin_bswap64(buildValue));
+    return !buildIdHex.empty();
+}
+
+bool TryGetHighestInstalledVersionRaw(std::uint64_t applicationId, std::uint32_t& version) {
+    version = 0;
+
+    const Result initResult = nsInitialize();
+    if (R_FAILED(initResult)) {
+        return false;
+    }
+
+    std::vector<NsApplicationContentMetaStatus> statuses(32);
+    s32 count = 0;
+    const Result listResult =
+        nsListApplicationContentMetaStatus(applicationId, 0, statuses.data(), static_cast<s32>(statuses.size()), &count);
+    nsExit();
+    if (R_FAILED(listResult) || count <= 0) {
+        return false;
+    }
+
+    std::uint32_t highest = 0;
+    for (s32 index = 0; index < count; ++index) {
+        highest = std::max(highest, static_cast<std::uint32_t>(statuses[index].version));
+    }
+
+    version = highest;
+    return true;
+}
+
+bool TryResolveBuildIdFromVersionsDirectory(std::uint64_t applicationId,
+                                            std::uint32_t installedVersion,
+                                            std::string& buildIdHex) {
+    buildIdHex.clear();
+    if (installedVersion == 0 && applicationId == 0) {
+        return false;
+    }
+
+    std::string cachedBuildId;
+    if (LoadCachedBuildId(applicationId, installedVersion, cachedBuildId)) {
+        buildIdHex = cachedBuildId;
+        return true;
+    }
+
+    HttpResponse response;
+    std::string error;
+    const std::string url = std::string(kCheatVersionsDirectory) + FormatTitleId(applicationId) + ".json";
+    if (!HttpGetToString(url, response, error) || response.statusCode < 200 || response.statusCode >= 300) {
+        return false;
+    }
+
+    picojson::value root;
+    const std::string parseError = picojson::parse(root, StripUtf8Bom(response.body));
+    if (!parseError.empty() || !root.is<picojson::object>()) {
+        return false;
+    }
+
+    const auto& object = root.get<picojson::object>();
+    const auto versionIt = object.find(std::to_string(installedVersion));
+    if (versionIt == object.end() || !versionIt->second.is<std::string>()) {
+        return false;
+    }
+
+    buildIdHex = ToLowerAscii(versionIt->second.get<std::string>());
+    if (buildIdHex.empty()) {
+        return false;
+    }
+
+    SaveCachedBuildId(applicationId, installedVersion, buildIdHex);
+    return true;
+}
+
 std::vector<InstalledTitle> LoadInstalledTitlesFull(std::string& note) {
     std::vector<InstalledTitle> titles;
 
@@ -544,6 +730,59 @@ std::vector<InstalledTitle> LoadInstalledTitlesFromCatalog(const CatalogIndex& c
 }
 
 }  // namespace
+
+bool TryResolveInstalledTitleBuildId(InstalledTitle& title, bool allowNetworkFallback, std::string& note) {
+    note.clear();
+    if (!title.buildIdHex.empty() || title.applicationId == 0) {
+        return !title.buildIdHex.empty();
+    }
+
+    const bool safeConsoleServices = GetRuntimeEnvironment() == RuntimeEnvironment::Console &&
+                                     !HasImportedTitlesFile() &&
+                                     !HasEdenSdLayoutMarker() &&
+                                     !IsLikelyEmulatorLoader() &&
+                                     !IsUnsafeForwarderLikeContext();
+    if (!safeConsoleServices) {
+        note = "Build ID indisponível neste ambiente.";
+        return false;
+    }
+
+    std::uint32_t installedVersion = 0;
+    if (TryGetHighestInstalledVersionRaw(title.applicationId, installedVersion)) {
+        if (!allowNetworkFallback) {
+            note = "Build ID depende do banco remoto de versões.";
+            return false;
+        }
+
+        std::string resolvedBuildId;
+        if (TryResolveBuildIdFromVersionsDirectory(title.applicationId, installedVersion, resolvedBuildId)) {
+            title.buildIdHex = ToLowerAscii(resolvedBuildId);
+            note = "Build ID resolvida via banco remoto de versões.";
+            return true;
+        }
+        note = "Build ID não encontrada no banco remoto de versões.";
+    } else {
+        note = "Versão instalada não pôde ser lida via NS.";
+    }
+
+    const bool safeConsoleDmnt = GetRuntimeEnvironment() == RuntimeEnvironment::Console &&
+                                 !HasImportedTitlesFile() &&
+                                 !HasEdenSdLayoutMarker() &&
+                                 !IsLikelyEmulatorLoader() &&
+                                 !IsUnsafeForwarderLikeContext();
+    if (!safeConsoleDmnt) {
+        return false;
+    }
+
+    std::string dmntBuildId;
+    if (TryReadBuildIdFromDmnt(title.applicationId, dmntBuildId)) {
+        title.buildIdHex = ToLowerAscii(dmntBuildId);
+        note = "Build ID obtida via dmnt:cht.";
+        return true;
+    }
+
+    return false;
+}
 
 bool InitializePlatform(PlatformSession& session, std::string& note) {
     if (R_SUCCEEDED(appletLockExit())) {

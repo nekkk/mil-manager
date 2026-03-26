@@ -86,7 +86,7 @@
       "9cb3dccc": "- Configuration in sdmc:/switch/mil_manager/settings.ini"
     },
     "console_detected_local_reading_always_enabled_ignoring_scan_mode_off": {
-      "ce52efd8": "Console detected. Local reading always enabled; ignoring scan_mode=off."
+      "ce52efd8": "Console detected. Local reading always enabled; ignoring disabled search."
     },
     "console_emulator_compatibility_with_service_fallback": {
       "d8553382": "- Console + emulator compatibility with service fallback"
@@ -195,7 +195,10 @@
       "5c9370d5": "installed-titles-cache.json does not contain a titles array."
     },
     "installed_titles_loaded_using_full_scan": {
-      "69e538d5": "Installed titles loaded using full scan."
+      "69e538d5": "Installed titles loaded using full search."
+    },
+    "ui.status.catalog_and_title_search_updated": {
+      "manual": "Catalog and title search updated."
     },
     "installing_cheat": {
       "7a474d34": "Installing cheat"
