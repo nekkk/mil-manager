@@ -134,10 +134,10 @@ bool IsApplicationApplet() {
 
 bool IsUnsafeForwarderLikeContext() {
     const std::string loaderInfo = ToLowerAscii(GetLoaderInfoString());
+    const bool isNxHbloader = loaderInfo.find("nx-hbloader") != std::string::npos;
     const bool weakLoaderInfo = loaderInfo.empty() ||
-                                loaderInfo.find("hbl") != std::string::npos ||
-                                loaderInfo.find("hbmenu") != std::string::npos ||
-                                loaderInfo.find("nx-hbloader") != std::string::npos;
+                                (!isNxHbloader && loaderInfo.find("hbl") != std::string::npos) ||
+                                loaderInfo.find("hbmenu") != std::string::npos;
     return !envIsNso() && IsApplicationApplet() && weakLoaderInfo;
 }
 
@@ -612,7 +612,6 @@ std::vector<InstalledTitle> LoadInstalledTitles(const AppConfig& config, const C
     const RuntimeEnvironment environment = GetRuntimeEnvironment();
     const bool importedTitlesAvailable = HasImportedTitlesFile();
     const bool emulator = environment == RuntimeEnvironment::Emulator;
-    const bool sphairaLoader = IsSphairaLoader();
     const bool loaderInfoEmpty = ToLowerAscii(GetLoaderInfoString()).empty();
     const bool unsafeForwarderContext = IsUnsafeForwarderLikeContext();
 
@@ -628,10 +627,6 @@ std::vector<InstalledTitle> LoadInstalledTitles(const AppConfig& config, const C
 
     if (config.scanMode == InstalledTitleScanMode::Disabled) {
         if (environment == RuntimeEnvironment::Console) {
-            if (sphairaLoader && !importedTitlesAvailable) {
-                note = "Loader sphaira detectado. Leitura de títulos mantida em modo seguro neste contexto.";
-                return {};
-            }
             note = "Console detectado. Leitura local sempre ativa; ignorando scan_mode=off.";
             return LoadInstalledTitlesFull(note);
         }
@@ -645,10 +640,6 @@ std::vector<InstalledTitle> LoadInstalledTitles(const AppConfig& config, const C
 
     if (config.scanMode == InstalledTitleScanMode::Auto) {
         if (environment == RuntimeEnvironment::Console) {
-            if (sphairaLoader && !importedTitlesAvailable) {
-                note = "Loader sphaira detectado. Usando modo seguro sem scan NS agressivo.";
-                return {};
-            }
             note = "Console detectado. Modo automático usando leitura completa.";
             return LoadInstalledTitlesFull(note);
         }
@@ -661,15 +652,13 @@ std::vector<InstalledTitle> LoadInstalledTitles(const AppConfig& config, const C
         return {};
     }
 
-    if (environment != RuntimeEnvironment::Console || sphairaLoader) {
+    if (environment != RuntimeEnvironment::Console) {
         if (importedTitlesAvailable) {
             return LoadInstalledTitlesFromImportedManifest(note);
         }
-        note = sphairaLoader
-                   ? "Loader sphaira em contexto não confirmado; use lista sincronizada em installed-titles-cache.json."
-                   : (environment == RuntimeEnvironment::Emulator
-                          ? "Emulador detectado. Serviços NS do host não são confiáveis aqui; use lista sincronizada em installed-titles-cache.json."
-                          : "Ambiente não confirmado. Leitura local por NS foi bloqueada para evitar crash em emuladores.");
+        note = environment == RuntimeEnvironment::Emulator
+                   ? "Emulador detectado. Servi??os NS do host n??o s??o confi??veis aqui; use lista sincronizada em installed-titles-cache.json."
+                   : "Ambiente n??o confirmado. Leitura local por NS foi bloqueada para evitar crash em emuladores.";
         return {};
     }
 
