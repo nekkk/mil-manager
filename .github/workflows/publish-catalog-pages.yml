@@ -10,6 +10,7 @@ on:
       - "catalog-source/**"
       - "tools/generate-index.py"
       - "tools/generate-cheats-index.py"
+      - "tools/generate-saves-index.py"
       - "tools/prepare-pages-site.py"
       - ".github/workflows/publish-catalog-pages.yml"
 
@@ -47,6 +48,9 @@ jobs:
 
       - name: Generate cheats index
         run: python tools/generate-cheats-index.py
+
+      - name: Generate saves index
+        run: python tools/generate-saves-index.py
 
       - name: Prepare Pages site
         env:
