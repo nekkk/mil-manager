@@ -345,8 +345,10 @@ struct AppState {
     CatalogIndex catalog;
     CheatsIndex cheatsIndex;
     std::vector<CatalogEntry> derivedCheatEntries;
+    std::unordered_map<std::string, std::string> derivedCheatSearchIndex;
     SavesIndex savesIndex;
     std::vector<CatalogEntry> derivedSaveEntries;
+    std::unordered_map<std::string, std::string> derivedSaveSearchIndex;
     std::vector<InstalledTitle> installedTitles;
     std::vector<InstallReceipt> receipts;
     ContentSection section = ContentSection::Translations;
@@ -412,6 +414,8 @@ struct AppState {
     int progressPercent = 0;
     std::unordered_map<std::string, std::string> languageStrings;
     bool languageStringsLoaded = false;
+    std::vector<const CatalogEntry*> visibleEntriesCache;
+    bool visibleEntriesDirty = true;
     PlatformSession* activeSession = nullptr;
 };
 
@@ -500,7 +504,7 @@ const CheatTitleRecord* FindCheatTitleRecord(const CheatsIndex& index, const std
 const CheatBuildRecord* FindCheatBuildRecord(const CheatTitleRecord& title, const std::string& buildId);
 const SaveTitleRecord* FindSaveTitleRecord(const SavesIndex& index, const std::string& titleId);
 bool IsRyujinxGuestEnvironment();
-std::vector<const CatalogEntry*> BuildVisibleEntries(const AppState& state);
+const std::vector<const CatalogEntry*>& BuildVisibleEntries(AppState& state);
 void RenderUi(PlatformSession& session, const AppState& state, const std::vector<const CatalogEntry*>& items);
 
 void PumpUi(AppState& state) {
@@ -873,10 +877,69 @@ std::string NormalizeSearchQuery(std::string value) {
     return ToLowerAscii(Trim(value));
 }
 
+void InvalidateVisibleEntries(AppState& state) {
+    state.visibleEntriesDirty = true;
+    state.visibleEntriesCache.clear();
+}
+
+std::string BuildCheatSearchText(const CatalogEntry& entry, const CheatTitleRecord* cheatTitle) {
+    std::string text = ToLowerAscii(entry.name) + "\n" + ToLowerAscii(entry.titleId);
+    if (cheatTitle != nullptr) {
+        for (const CheatBuildRecord& build : cheatTitle->builds) {
+            text += "\n";
+            text += ToLowerAscii(build.buildId);
+            for (const std::string& category : build.categories) {
+                text += "\n";
+                text += ToLowerAscii(category);
+            }
+            if (!build.primarySource.empty()) {
+                text += "\n";
+                text += ToLowerAscii(build.primarySource);
+            }
+        }
+    }
+    return text;
+}
+
+std::string BuildSaveSearchText(const CatalogEntry& entry, const SaveTitleRecord* saveTitle) {
+    std::string text = ToLowerAscii(entry.name) + "\n" + ToLowerAscii(entry.titleId);
+    if (saveTitle != nullptr) {
+        for (const SaveVariantRecord& variant : saveTitle->variants) {
+            if (!variant.label.empty()) {
+                text += "\n";
+                text += ToLowerAscii(variant.label);
+            }
+            if (!variant.category.empty()) {
+                text += "\n";
+                text += ToLowerAscii(variant.category);
+            }
+        }
+    }
+    return text;
+}
+
+const std::string* FindDerivedSearchText(const AppState& state, const CatalogEntry& entry) {
+    const auto* index = &state.derivedCheatSearchIndex;
+    if (entry.section == ContentSection::SaveGames) {
+        index = &state.derivedSaveSearchIndex;
+    } else if (entry.section != ContentSection::Cheats) {
+        return nullptr;
+    }
+    const auto it = index->find(entry.id);
+    if (it == index->end()) {
+        return nullptr;
+    }
+    return &it->second;
+}
+
 bool EntryMatchesSearch(const AppState& state, const CatalogEntry& entry) {
     const std::string query = NormalizeSearchQuery(state.searchQuery);
     if (query.empty()) {
         return true;
+    }
+
+    if (const std::string* indexed = FindDerivedSearchText(state, entry)) {
+        return indexed->find(query) != std::string::npos;
     }
 
     const std::string name = ToLowerAscii(entry.name);
@@ -957,6 +1020,7 @@ bool OpenSearchDialog(AppState& state) {
 
     state.searchQuery = Trim(buffer);
     state.selection = 0;
+    InvalidateVisibleEntries(state);
     if (state.section == ContentSection::Cheats) {
         EnsureCheatsIndexReady(state, false);
         if (NormalizeSearchQuery(state.searchQuery).empty() && !state.cheatsIndexFiltered && !state.cheatsIndex.titles.empty()) {
@@ -976,6 +1040,7 @@ bool OpenSearchDialog(AppState& state) {
 
 void RefreshDerivedCheatEntries(AppState& state) {
     state.derivedCheatEntries.clear();
+    state.derivedCheatSearchIndex.clear();
 
     std::vector<std::string> seenTitleIds;
     for (const CheatTitleRecord& cheatTitle : state.cheatsIndex.titles) {
@@ -1034,6 +1099,7 @@ void RefreshDerivedCheatEntries(AppState& state) {
         }
 
         state.derivedCheatEntries.push_back(entry);
+        state.derivedCheatSearchIndex[entry.id] = BuildCheatSearchText(entry, &cheatTitle);
         AppendUniqueString(seenTitleIds, entry.titleId);
     }
 
@@ -1045,11 +1111,14 @@ void RefreshDerivedCheatEntries(AppState& state) {
             continue;
         }
         state.derivedCheatEntries.push_back(entry);
+        state.derivedCheatSearchIndex[entry.id] = BuildCheatSearchText(entry, nullptr);
     }
+    InvalidateVisibleEntries(state);
 }
 
 void RefreshDerivedSaveEntries(AppState& state) {
     state.derivedSaveEntries.clear();
+    state.derivedSaveSearchIndex.clear();
 
     std::vector<std::string> seenTitleIds;
     for (const SaveTitleRecord& saveTitle : state.savesIndex.titles) {
@@ -1147,6 +1216,8 @@ void RefreshDerivedSaveEntries(AppState& state) {
         }
 
         state.derivedSaveEntries.push_back(std::move(entry));
+        state.derivedSaveSearchIndex[state.derivedSaveEntries.back().id] =
+            BuildSaveSearchText(state.derivedSaveEntries.back(), &saveTitle);
         AppendUniqueString(seenTitleIds, ToLowerAscii(saveTitle.titleId));
     }
 
@@ -1158,7 +1229,9 @@ void RefreshDerivedSaveEntries(AppState& state) {
             continue;
         }
         state.derivedSaveEntries.push_back(entry);
+        state.derivedSaveSearchIndex[entry.id] = BuildSaveSearchText(entry, nullptr);
     }
+    InvalidateVisibleEntries(state);
 }
 
 bool ShouldFilterCheatsIndexForCurrentView(const AppState& state) {
@@ -1168,6 +1241,7 @@ bool ShouldFilterCheatsIndexForCurrentView(const AppState& state) {
 void FilterCheatsIndexToDetectedTitles(AppState& state) {
     if (!ShouldFilterCheatsIndexForCurrentView(state) || state.cheatsIndex.titles.empty()) {
         state.cheatsIndexFiltered = false;
+        InvalidateVisibleEntries(state);
         return;
     }
 
@@ -1185,6 +1259,7 @@ void FilterCheatsIndexToDetectedTitles(AppState& state) {
     } else {
         state.cheatsIndexFiltered = false;
     }
+    InvalidateVisibleEntries(state);
 }
 
 void PopulateDetectedCheatBuildIds(AppState& state, bool allowNetworkFallback) {
@@ -1221,67 +1296,99 @@ bool ShouldShowProofCover(const CatalogEntry& entry) {
     return normalizedTitleId == "0100b6e00a420000" || normalizedId == "dust-ptbr";
 }
 
-std::vector<const CatalogEntry*> BuildVisibleEntries(const AppState& state) {
-    std::vector<const CatalogEntry*> items;
+const std::vector<const CatalogEntry*>& BuildVisibleEntries(AppState& state) {
+    if (!state.visibleEntriesDirty) {
+        return state.visibleEntriesCache;
+    }
+
+    struct PreparedEntry {
+        const CatalogEntry* entry = nullptr;
+        std::string sortName;
+        std::string recentKey;
+        bool suggested = false;
+        bool detected = false;
+    };
+
+    std::vector<PreparedEntry> prepared;
     const std::vector<CatalogEntry>* sourceEntries = &state.catalog.entries;
     if (state.section == ContentSection::Cheats) {
         sourceEntries = &state.derivedCheatEntries;
     } else if (state.section == ContentSection::SaveGames) {
         sourceEntries = &state.derivedSaveEntries;
     }
+
+    const std::string query = NormalizeSearchQuery(state.searchQuery);
     for (const CatalogEntry& entry : *sourceEntries) {
-        if (entry.section == state.section && EntryMatchesSearch(state, entry) &&
-            ((state.section != ContentSection::Cheats && state.section != ContentSection::SaveGames) ||
-             !NormalizeSearchQuery(state.searchQuery).empty() ||
-             (state.section == ContentSection::Cheats && ShouldShowCheatEntryByDefault(state, entry)) ||
-             (state.section == ContentSection::SaveGames && ShouldShowSaveEntryByDefault(state, entry)))) {
-            items.push_back(&entry);
+        if (entry.section != state.section) {
+            continue;
         }
+        if (!EntryMatchesSearch(state, entry)) {
+            continue;
+        }
+        if ((state.section == ContentSection::Cheats || state.section == ContentSection::SaveGames) && query.empty()) {
+            const bool showByDefault = state.section == ContentSection::Cheats ? ShouldShowCheatEntryByDefault(state, entry)
+                                                                              : ShouldShowSaveEntryByDefault(state, entry);
+            if (!showByDefault) {
+                continue;
+            }
+        }
+
+        const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
+        PreparedEntry item;
+        item.entry = &entry;
+        item.sortName = ToLowerAscii(entry.name);
+        item.recentKey = entry.contentRevision;
+        item.detected = installedTitle != nullptr;
+        item.suggested = entry.section == ContentSection::Cheats ? CheatEntryHasExactBuildMatch(state, entry, installedTitle)
+                                                                 : installedTitle != nullptr;
+        prepared.push_back(std::move(item));
     }
 
-    std::sort(items.begin(), items.end(), [&](const CatalogEntry* left, const CatalogEntry* right) {
-        const bool leftSuggested = EntryIsSuggested(state, *left);
-        const bool rightSuggested = EntryIsSuggested(state, *right);
-        const bool leftDetected = FindInstalledTitle(state.installedTitles, left->titleId) != nullptr;
-        const bool rightDetected = FindInstalledTitle(state.installedTitles, right->titleId) != nullptr;
-
+    std::sort(prepared.begin(), prepared.end(), [&](const PreparedEntry& left, const PreparedEntry& right) {
         switch (state.sortMode) {
             case SortMode::Name:
-                if (left->name != right->name) {
-                    return left->name < right->name;
+                if (left.sortName != right.sortName) {
+                    return left.sortName < right.sortName;
                 }
                 break;
             case SortMode::Recent:
-                if (left->contentRevision != right->contentRevision) {
-                    return left->contentRevision > right->contentRevision;
+                if (left.recentKey != right.recentKey) {
+                    return left.recentKey > right.recentKey;
                 }
-                if (left->featured != right->featured) {
-                    return left->featured > right->featured;
+                if (left.entry->featured != right.entry->featured) {
+                    return left.entry->featured > right.entry->featured;
                 }
-                if (leftSuggested != rightSuggested) {
-                    return leftSuggested > rightSuggested;
+                if (left.suggested != right.suggested) {
+                    return left.suggested > right.suggested;
                 }
                 break;
             case SortMode::Recommended:
             default:
-                if (leftSuggested != rightSuggested) {
-                    return leftSuggested > rightSuggested;
+                if (left.suggested != right.suggested) {
+                    return left.suggested > right.suggested;
                 }
-                if (leftDetected != rightDetected) {
-                    return leftDetected > rightDetected;
+                if (left.detected != right.detected) {
+                    return left.detected > right.detected;
                 }
-                if (left->featured != right->featured) {
-                    return left->featured > right->featured;
+                if (left.entry->featured != right.entry->featured) {
+                    return left.entry->featured > right.entry->featured;
                 }
                 break;
         }
 
-        if (left->name != right->name) {
-            return left->name < right->name;
+        if (left.sortName != right.sortName) {
+            return left.sortName < right.sortName;
         }
-        return left->id < right->id;
+        return left.entry->id < right.entry->id;
     });
-    return items;
+
+    state.visibleEntriesCache.clear();
+    state.visibleEntriesCache.reserve(prepared.size());
+    for (const PreparedEntry& item : prepared) {
+        state.visibleEntriesCache.push_back(item.entry);
+    }
+    state.visibleEntriesDirty = false;
+    return state.visibleEntriesCache;
 }
 
 std::string ThumbnailCachePathForEntry(const CatalogEntry& entry) {
@@ -5593,7 +5700,7 @@ void RenderEntries(const AppState& state, const std::vector<const CatalogEntry*>
     PrintLine(MakeCompatibilitySummaryLocalized(state, selectedEntry, installedTitle));
 }
 
-void Render(const AppState& state) {
+void Render(AppState& state) {
     consoleClear();
 
     PrintLine(UiText(state, "Gerenciador MIL", "MIL Manager"));
@@ -5642,6 +5749,7 @@ void RefreshInstalledTitles(AppState& state) {
         !FileHasContent(kInstalledTitlesCachePath)) {
         state.installedTitles.clear();
         state.platformNote = "Loader info vazio. Leitura local por NS foi bloqueada em modo seguro.";
+        InvalidateVisibleEntries(state);
         return;
     }
 
@@ -5650,6 +5758,7 @@ void RefreshInstalledTitles(AppState& state) {
     if (!titlesNote.empty()) {
         state.platformNote = titlesNote;
     }
+    InvalidateVisibleEntries(state);
 }
 
 void CycleLanguage(AppState& state) {
@@ -5699,6 +5808,7 @@ void CycleSortMode(AppState& state) {
     }
 
     state.selection = 0;
+    InvalidateVisibleEntries(state);
     state.statusLine = std::string(UiText(state, "Ordenação: ", "Sort mode: ")) + SortModeLabel(state, state.sortMode);
 }
 
@@ -5823,6 +5933,7 @@ void PreviewTouchTarget(AppState& state, const TouchTarget& target) {
                 state.focus = AppState::FocusPane::Sections;
                 state.section = sections[static_cast<std::size_t>(target.index)];
                 state.selection = 0;
+                InvalidateVisibleEntries(state);
                 EnsureCheatsIndexReady(state, false);
                 EnsureSavesIndexReady(state, false);
             }
@@ -6155,6 +6266,7 @@ int RunApplication() {
                 currentSectionIndex = (currentSectionIndex + 1) % sections.size();
                 state.section = sections[currentSectionIndex];
                 state.selection = 0;
+                InvalidateVisibleEntries(state);
                 EnsureCheatsIndexReady(state, false);
                 EnsureSavesIndexReady(state, false);
             } else if (!visibleEntries.empty()) {
@@ -6166,6 +6278,7 @@ int RunApplication() {
                 currentSectionIndex = (currentSectionIndex + sections.size() - 1) % sections.size();
                 state.section = sections[currentSectionIndex];
                 state.selection = 0;
+                InvalidateVisibleEntries(state);
                 EnsureCheatsIndexReady(state, false);
                 EnsureSavesIndexReady(state, false);
             } else if (state.selection > 0) {
