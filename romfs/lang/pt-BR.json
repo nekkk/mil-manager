@@ -23,7 +23,8 @@
       "cc8a3d29": "Build n\u00e3o detectada"
     },
     "build_unknown": {
-      "2ac47a86": "Build Desconhecida"
+      "2ac47a86": "Build Desconhecida",
+      "8d6f2bcc": "Build Desconhecida"
     },
     "builds": {
       "1994c708": "builds"
@@ -196,9 +197,6 @@
     },
     "installed_titles_loaded_using_full_scan": {
       "69e538d5": "T\u00edtulos instalados carregados por busca completa."
-    },
-    "ui.status.catalog_and_title_search_updated": {
-      "manual": "Cat\u00e1logo e busca de t\u00edtulos atualizados."
     },
     "installing_cheat": {
       "7a474d34": "Instalando trapa\u00e7a"
@@ -477,6 +475,13 @@
       "theme": "Tema",
       "yes": "Sim"
     },
+    "compatibility": {
+      "compatible_with_installed_version": "Compatível com a versão instalada: ",
+      "game_not_found": "Jogo não encontrado no console/emulador.",
+      "game_not_found_with_variants": "Jogo não encontrado no console/emulador. Variantes disponíveis: ",
+      "version_unavailable": "Versão do jogo indisponível.",
+      "version_unavailable_with_variants": "Versão do jogo indisponível. Variantes disponíveis: "
+    },
     "content": {
       "cheat": "Trapa\u00e7a",
       "dubbing": "Dublagem",
@@ -495,6 +500,18 @@
       "source_prefix": "Fonte: "
     },
     "missing_key": "[[chave ausente]]",
+    "progress": {
+      "installing_save": "Aplicando save",
+      "restoring_save": "Restaurando save",
+      "save_backup_restore": "Backup salvo e variante aplicada."
+    },
+    "save": {
+      "intro": "Backup autom\u00e1tico do save atual e aplica\u00e7\u00e3o direta da variante selecionada.",
+      "summary": {
+        "install_remove": "A instala\u00e7\u00e3o faz backup do save atual e aplica a variante selecionada. Ao remover, o backup \u00e9 restaurado.",
+        "install_remove_variants": "A instala\u00e7\u00e3o faz backup do save atual e aplica a variante selecionada. Variantes dispon\u00edveis: "
+      }
+    },
     "section": {
       "about": "Sobre a M.I.L.",
       "cheats": "Trapa\u00e7as",
@@ -515,6 +532,7 @@
       "online": "Cat\u00e1logo online"
     },
     "status": {
+      "catalog_and_title_search_updated": "Cat\u00e1logo e busca de t\u00edtulos atualizados.",
       "games_prefix": "Jogos ",
       "language_saved": "Idioma salvo em settings.ini",
       "packages_prefix": "Pacotes ",

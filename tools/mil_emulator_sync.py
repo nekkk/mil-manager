@@ -5,6 +5,7 @@ import argparse
 import json
 import os
 import re
+import shutil
 import sys
 from dataclasses import asdict, dataclass, field
 from datetime import datetime, timezone
@@ -17,6 +18,8 @@ LOCALAPPDATA = Path(os.environ.get("LOCALAPPDATA", ""))
 
 DEFAULT_SD_SUBDIR = Path("sdcard") / "switch" / "mil_manager" / "cache"
 DEFAULT_CACHE_NAME = "installed-titles-cache.json"
+SAVE_OPS_SUBDIR = Path("switch") / "mil_manager" / "cache" / "save-ops"
+RECEIPTS_SUBDIR = Path("switch") / "mil_manager" / "cache" / "receipts"
 SUPPORTED_EXTENSIONS = {".nsp", ".pfs0", ".xci", ".nca", ".nro", ".nso"}
 TITLE_ID_PATTERN = re.compile(r"(?i)(?:\[)?([0-9a-f]{16})(?:\])?")
 
@@ -328,6 +331,10 @@ class EdenAdapter(EmulatorAdapter):
     name = "eden"
     implemented = False
 
+    def detect_default_root(self) -> Optional[Path]:
+        root = APPDATA / "eden"
+        return root if root.exists() else None
+
 
 class YuzuLikeAdapter(EmulatorAdapter):
     name = "yuzu-like"
@@ -339,6 +346,137 @@ ADAPTERS: Dict[str, EmulatorAdapter] = {
     "eden": EdenAdapter(),
     "yuzu-like": YuzuLikeAdapter(),
 }
+
+
+def sd_root_for_emulator(emulator: str, root: Path) -> Path:
+    if emulator == "eden":
+        return root / "sdmc"
+    return root / "sdcard"
+
+
+def host_path_from_sd(emulator: str, root: Path, sd_path: str) -> Path:
+    normalized = sd_path.replace("\\", "/")
+    if normalized.startswith("sdmc:/"):
+        normalized = normalized[6:]
+    elif normalized.startswith("sdcard:/"):
+        normalized = normalized[8:]
+    elif normalized.startswith("sdmc:"):
+        normalized = normalized[5:]
+    elif normalized.startswith("sdcard:"):
+        normalized = normalized[7:]
+    normalized = normalized.lstrip("/")
+    return sd_root_for_emulator(emulator, root) / Path(normalized)
+
+
+def clear_directory(path: Path) -> None:
+    path.mkdir(parents=True, exist_ok=True)
+    for child in path.iterdir():
+        if child.is_dir():
+            shutil.rmtree(child)
+        else:
+            child.unlink()
+
+
+def copy_tree_contents(source: Path, destination: Path) -> None:
+    destination.mkdir(parents=True, exist_ok=True)
+    for child in source.iterdir():
+        target = destination / child.name
+        if child.is_dir():
+            if target.exists():
+                shutil.rmtree(target)
+            shutil.copytree(child, target)
+        else:
+            shutil.copy2(child, target)
+
+
+def write_receipt(emulator: str, root: Path, operation: Dict[str, object]) -> None:
+    receipts_dir = sd_root_for_emulator(emulator, root) / RECEIPTS_SUBDIR
+    receipts_dir.mkdir(parents=True, exist_ok=True)
+    package_id = str(operation.get("packageId") or "")
+    receipt_path = receipts_dir / f"{package_id}.ini"
+    lines = [
+        f"package_id={package_id}",
+        f"package_version={operation.get('packageVersion') or ''}",
+        f"title_id={str(operation.get('titleId') or '').lower()}",
+        "install_root=hostsave:/",
+        f"source_url={operation.get('sourceUrl') or ''}",
+        f"installed_at={now_utc_iso()}",
+        f"game_version={operation.get('gameVersion') or ''}",
+        "install_type=save",
+        f"backup_path={operation.get('backupRoot') or ''}",
+        f"save_kind={operation.get('saveKind') or 'account'}",
+        f"save_user_id={operation.get('saveUserId') or ''}",
+        f"variant_id={operation.get('variantId') or ''}",
+    ]
+    receipt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
+def account_uid_to_eden_legacy_dir(uid_text: str) -> str:
+    uid_text = uid_text.strip().upper()
+    if len(uid_text) != 32:
+        return uid_text
+    return uid_text[16:32] + uid_text[0:16]
+
+
+def resolve_eden_save_target(root: Path, operation: Dict[str, object]) -> Path:
+    title_id = str(operation.get("titleId") or "").upper()
+    user_id = account_uid_to_eden_legacy_dir(str(operation.get("saveUserId") or ""))
+    base = root / "nand" / "user" / "save"
+    if user_id:
+        return base / "0000000000000000" / user_id / title_id
+    account_root = base / "0000000000000000"
+    if account_root.exists():
+        user_dirs = sorted([child for child in account_root.iterdir() if child.is_dir()])
+        if user_dirs:
+            return user_dirs[0] / title_id
+    return base / title_id
+
+
+def process_save_ops(emulator: str, root: Path) -> int:
+    ops_dir = sd_root_for_emulator(emulator, root) / SAVE_OPS_SUBDIR
+    if not ops_dir.exists():
+        return 0
+
+    processed = 0
+    for op_path in sorted(ops_dir.glob("*.json")):
+        try:
+            operation = json.loads(op_path.read_text(encoding="utf-8-sig"))
+        except json.JSONDecodeError as exc:
+            print(f"Skipping invalid save op {op_path.name}: {exc}", file=sys.stderr)
+            continue
+
+        if str(operation.get("action") or "") != "install_save":
+            continue
+
+        payload_root = host_path_from_sd(emulator, root, str(operation.get("payloadRoot") or ""))
+        if not payload_root.exists():
+            print(f"Skipping save op {op_path.name}: payload not found at {payload_root}", file=sys.stderr)
+            continue
+
+        backup_root = host_path_from_sd(emulator, root, str(operation.get("backupRoot") or ""))
+
+        if emulator == "eden":
+            target_root = resolve_eden_save_target(root, operation)
+        else:
+            print(f"Skipping save op {op_path.name}: emulator '{emulator}' not supported for host-side save apply yet.", file=sys.stderr)
+            continue
+
+        target_root.mkdir(parents=True, exist_ok=True)
+        clear_directory(backup_root)
+        if any(target_root.iterdir()):
+            copy_tree_contents(target_root, backup_root)
+        else:
+            backup_root.mkdir(parents=True, exist_ok=True)
+            (backup_root / ".mil-empty").write_text("", encoding="utf-8")
+
+        clear_directory(target_root)
+        copy_tree_contents(payload_root, target_root)
+        write_receipt(emulator, root, operation)
+        shutil.rmtree(payload_root, ignore_errors=True)
+        op_path.unlink(missing_ok=True)
+        processed += 1
+
+    return processed
 
 
 def detect_default_output(root: Path) -> Path:
@@ -355,6 +493,7 @@ def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser.add_argument("--emulator", default="ryujinx", choices=sorted(ADAPTERS.keys()))
     parser.add_argument("--root", default="", help="Emulator root directory.")
     parser.add_argument("--output", default="", help="Normalized cache output path.")
+    parser.add_argument("--apply-save-ops-only", action="store_true", help="Apply pending emulator save operations and exit.")
     parser.add_argument("--list-adapters", action="store_true", help="List known adapters and exit.")
     return parser.parse_args(argv)
 
@@ -369,7 +508,7 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
         return 0
 
     adapter = ADAPTERS[args.emulator]
-    if not adapter.implemented:
+    if not adapter.implemented and not args.apply_save_ops_only:
         print(f"Adapter '{args.emulator}' is planned but not implemented yet.", file=sys.stderr)
         return 2
 
@@ -377,6 +516,13 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
     if root is None:
         print(f"Could not locate default root for emulator '{args.emulator}'.", file=sys.stderr)
         return 2
+
+    processed_ops = process_save_ops(args.emulator, root)
+    if processed_ops:
+        print(f"Applied {processed_ops} pending save operation(s).")
+
+    if args.apply_save_ops_only:
+        return 0
 
     payload = adapter.scan(root)
 

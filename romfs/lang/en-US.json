@@ -23,7 +23,8 @@
       "cc8a3d29": "Build not detected"
     },
     "build_unknown": {
-      "2ac47a86": "Build Unknown"
+      "2ac47a86": "Build Unknown",
+      "8d6f2bcc": "Build Unknown"
     },
     "builds": {
       "1994c708": "builds"
@@ -196,9 +197,6 @@
     },
     "installed_titles_loaded_using_full_scan": {
       "69e538d5": "Installed titles loaded using full search."
-    },
-    "ui.status.catalog_and_title_search_updated": {
-      "manual": "Catalog and title search updated."
     },
     "installing_cheat": {
       "7a474d34": "Installing cheat"
@@ -477,6 +475,13 @@
       "theme": "Theme",
       "yes": "Yes"
     },
+    "compatibility": {
+      "compatible_with_installed_version": "Compatible with installed version: ",
+      "game_not_found": "Game not found on the console/emulator.",
+      "game_not_found_with_variants": "Game not found on the console/emulator. Available variants: ",
+      "version_unavailable": "Installed game version unavailable.",
+      "version_unavailable_with_variants": "Installed game version unavailable. Available variants: "
+    },
     "content": {
       "cheat": "Cheat",
       "dubbing": "Dubbing",
@@ -495,6 +500,18 @@
       "source_prefix": "Source: "
     },
     "missing_key": "[[missing key]]",
+    "progress": {
+      "installing_save": "Applying save",
+      "restoring_save": "Restoring save",
+      "save_backup_restore": "Backup saved and variant applied."
+    },
+    "save": {
+      "intro": "Automatic backup of the current save and direct application of the selected variant.",
+      "summary": {
+        "install_remove": "Installing backs up the current save and applies the selected variant. Removing restores the backup.",
+        "install_remove_variants": "Installing backs up the current save and applies the selected variant. Available variants: "
+      }
+    },
     "section": {
       "about": "About M.I.L.",
       "cheats": "Cheats",
@@ -515,6 +532,7 @@
       "online": "Online catalog"
     },
     "status": {
+      "catalog_and_title_search_updated": "Catalog and title search updated.",
       "games_prefix": "Games ",
       "language_saved": "Language saved to settings.ini",
       "packages_prefix": "Packages ",

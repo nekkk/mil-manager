@@ -188,6 +188,11 @@ struct InstallReceipt {
     std::string sourceUrl;
     std::string installedAt;
     std::string gameVersion;
+    std::string installType;
+    std::string backupPath;
+    std::string saveKind;
+    std::string saveUserId;
+    std::string variantId;
     std::vector<std::string> files;
 };
 

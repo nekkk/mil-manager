@@ -29,7 +29,17 @@ bool InstallCheatTextFromFile(const CatalogEntry& entry,
                               const InstalledTitle* installedTitle,
                               InstallReceipt& receipt,
                               std::string& error);
-bool UninstallPackage(const InstallReceipt& receipt, std::string& error);
+bool InstallSaveData(const CatalogEntry& entry,
+                     const SaveVariantRecord& variant,
+                     const InstalledTitle* installedTitle,
+                     InstallReceipt& receipt,
+                     std::string& error,
+                     HttpProgressCallback progressCallback = nullptr,
+                     void* progressUserData = nullptr);
+bool UninstallPackage(const InstallReceipt& receipt,
+                      std::string& error,
+                      HttpProgressCallback progressCallback = nullptr,
+                      void* progressUserData = nullptr);
 bool FindReceiptForPackage(const std::vector<InstallReceipt>& receipts, const std::string& packageId, InstallReceipt* receipt);
 bool ExtractZipToDirectory(const std::string& zipPath,
                            const std::string& destinationDir,

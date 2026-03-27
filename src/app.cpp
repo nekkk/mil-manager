@@ -692,7 +692,9 @@ int InstallConfirmDialogY(const gfx::Canvas& canvas) {
 
 int VariantSelectDialogHeight(const AppState& state) {
     const int rowCount = std::max(1, static_cast<int>(state.variantSelectIds.size()));
-    return 140 + rowCount * (kVariantSelectRowHeight + kVariantSelectRowGap);
+    const int rowsHeight = rowCount * kVariantSelectRowHeight + std::max(0, rowCount - 1) * kVariantSelectRowGap;
+    return 62 + std::max(18, gfx::MeasureWrappedTextHeight(state.variantSelectMessage, kVariantSelectDialogWidth - 36, 1, 3)) +
+           12 + rowsHeight + 14 + kVariantSelectButtonsHeight + 16;
 }
 
 int VariantSelectDialogX(int canvasWidth) {
@@ -709,6 +711,14 @@ int VariantSelectDialogX(const gfx::Canvas& canvas) {
 
 int VariantSelectDialogY(const gfx::Canvas& canvas, const AppState& state) {
     return VariantSelectDialogY(canvas.height, state);
+}
+
+int VariantSelectDialogMessageHeight(const AppState& state) {
+    return std::max(18, gfx::MeasureWrappedTextHeight(state.variantSelectMessage, kVariantSelectDialogWidth - 36, 1, 3));
+}
+
+int VariantSelectDialogRowStartOffset(const AppState& state) {
+    return 62 + VariantSelectDialogMessageHeight(state) + 12;
 }
 
 int CheatBuildDialogMessageHeight(const AppState& state) {
@@ -1079,10 +1089,10 @@ void RefreshDerivedSaveEntries(AppState& state) {
         entry.summary = entry.summaryPtBr;
 
         if (entry.introPtBr.empty()) {
-            entry.introPtBr = u8"Backup em formato compatível com JKSV para restauração manual.";
+            entry.introPtBr = u8"Backup automático do save atual e aplicação direta da variante selecionada.";
         }
         if (entry.introEnUs.empty()) {
-            entry.introEnUs = "JKSV-compatible backup for manual restore.";
+            entry.introEnUs = "Automatic backup of the current save and direct application of the selected variant.";
         }
         entry.intro = entry.introPtBr;
 
@@ -2620,7 +2630,7 @@ std::string EntryVersionStatusLabel(const AppState& state, const CatalogEntry& e
     }
     if (entry.section == ContentSection::Cheats && EntryUsesCheatsIndex(state, entry)) {
         if (installedTitle == nullptr || installedTitle->buildIdHex.empty()) {
-            return UiString(state, "build_unknown", "Build Desconhecida", "Build Unknown");
+            return UiText(state, "Build Desconhecida", "Build Unknown");
         }
         const CheatTitleRecord* cheatTitle = FindCheatTitleRecord(state.cheatsIndex, entry.titleId);
         if (cheatTitle != nullptr && FindCheatBuildRecord(*cheatTitle, installedTitle->buildIdHex) != nullptr) {
@@ -2803,6 +2813,16 @@ const SaveTitleRecord* FindSaveTitleRecord(const SavesIndex& index, const std::s
     for (const auto& title : index.titles) {
         if (ToLowerAscii(title.titleId) == normalizedTitleId) {
             return &title;
+        }
+    }
+    return nullptr;
+}
+
+const SaveVariantRecord* FindSaveVariantRecord(const SaveTitleRecord& title, const std::string& variantId) {
+    const std::string normalizedVariantId = ToLowerAscii(variantId);
+    for (const auto& variant : title.variants) {
+        if (ToLowerAscii(variant.id) == normalizedVariantId) {
+            return &variant;
         }
     }
     return nullptr;
@@ -3091,7 +3111,7 @@ bool ShouldConfirmInstall(const AppState& state,
         }
 
         if (installedTitle->buildIdHex.empty()) {
-            title = UiString(state, "build_unknown", "Build Desconhecida", "Build Unknown");
+            title = UiText(state, "Build Desconhecida", "Build Unknown");
             message = UiText(state,
                              "O build ID do jogo não pôde ser detectado. Escolher manualmente um build de cheats?",
                              "The game's build ID could not be detected. Choose a cheat build manually?");
@@ -3313,6 +3333,65 @@ bool InstallResolvedEntry(AppState& state, const CatalogEntry& entry, const Cata
         state.statusLine = UiText(state,
                                   "Nenhum download disponível para esta entrada/variante.",
                                   "No download is available for this entry/variant.");
+        return false;
+    }
+
+    if (entry.section == ContentSection::SaveGames) {
+        const SaveTitleRecord* saveTitle = FindSaveTitleRecord(state.savesIndex, entry.titleId);
+        const SaveVariantRecord* saveVariant = nullptr;
+        if (saveTitle != nullptr) {
+            if (variant != nullptr) {
+                saveVariant = FindSaveVariantRecord(*saveTitle, variant->id);
+            }
+            if (saveVariant == nullptr && saveTitle->variants.size() == 1) {
+                saveVariant = &saveTitle->variants.front();
+            }
+        }
+
+        if (saveVariant == nullptr) {
+            state.statusLine = UiText(state,
+                                      "Nenhuma variante de save válida foi encontrada para instalação.",
+                                      "No valid save variant was found for installation.");
+            return false;
+        }
+
+        SetProgress(state,
+                    UiString(state, "ui.progress.installing_save", u8"Aplicando save", "Applying save"),
+                    entry.name,
+                    15);
+        UiDownloadProgressContext downloadProgress{
+            &state,
+            UiString(state, "ui.progress.installing_save", u8"Aplicando save", "Applying save"),
+            u8"Baixando save...",
+            "Downloading save...",
+            15,
+            55};
+
+        InstallReceipt newReceipt;
+        std::string error;
+        if (InstallSaveData(entry,
+                            *saveVariant,
+                            installedTitle,
+                            newReceipt,
+                            error,
+                            UpdateUiDownloadProgress,
+                            &downloadProgress)) {
+            SetProgress(state,
+                        UiString(state, "ui.progress.installing_save", u8"Aplicando save", "Applying save"),
+                        UiString(state,
+                                 "ui.progress.save_backup_restore",
+                                 u8"Backup salvo e variante aplicada.",
+                                 "Backup saved and variant applied."),
+                        100);
+            state.statusLine = std::string(UseEnglish(state) ? "Save applied: " : "Save aplicado: ") + entry.name;
+            std::string note;
+            state.receipts = LoadInstallReceipts(note);
+            ClearProgress(state);
+            return true;
+        }
+
+        state.statusLine = std::string(UseEnglish(state) ? "Save installation failed: " : "Falha na instalacao do save: ") + error;
+        ClearProgress(state);
         return false;
     }
 
@@ -3809,7 +3888,9 @@ std::string LocalizePlatformNote(const AppState& state, const std::string& note)
     if (note == "nsListApplicationRecord falhou no modo full.") {
         return UiText(state, u8"nsListApplicationRecord falhou no modo full.", "nsListApplicationRecord failed in full mode.");
     }
-    if (note == "Títulos instalados carregados por scan completo.") {
+    if (note == "Títulos instalados carregados por scan completo." ||
+        note == "Títulos instalados carregados por busca completa." ||
+        note == "TÃ­tulos instalados carregados por scan completo.") {
         return UiString(state,
                         "installed_titles_loaded_using_full_scan",
                         u8"Títulos instalados carregados por busca completa.",
@@ -3889,18 +3970,36 @@ std::string MakeCompatibilitySummaryLocalized(const AppState& state, const Catal
     const std::string variantSummary = EntryHasVariants(entry) ? VariantListSummary(entry) : std::string();
     if (!title) {
         if (!variantSummary.empty()) {
-            return UiText(state, u8"Jogo n?o encontrado no console/emulador. Variantes dispon?veis: ", "Game not found on console/emulator. Available variants: ") + variantSummary;
+            return UiString(state,
+                            "ui.compatibility.game_not_found_with_variants",
+                            u8"Jogo não encontrado no console/emulador. Variantes disponíveis: ",
+                            "Game not found on the console/emulator. Available variants: ") +
+                   variantSummary;
         }
-        return UiText(state, u8"Jogo n?o encontrado no console/emulador.", "Game not found on console/emulator.");
+        return UiString(state,
+                        "ui.compatibility.game_not_found",
+                        u8"Jogo não encontrado no console/emulador.",
+                        "Game not found on the console/emulator.");
     }
     if (title->displayVersion.empty()) {
         if (!variantSummary.empty()) {
-            return UiText(state, u8"Vers?o do jogo indispon?vel. Variantes dispon?veis: ", "Installed game version unavailable. Available variants: ") + variantSummary;
+            return UiString(state,
+                            "ui.compatibility.version_unavailable_with_variants",
+                            u8"Versão do jogo indisponível. Variantes disponíveis: ",
+                            "Installed game version unavailable. Available variants: ") +
+                   variantSummary;
         }
-        return UiText(state, u8"Vers?o do jogo indispon?vel.", "Installed game version unavailable.");
+        return UiString(state,
+                        "ui.compatibility.version_unavailable",
+                        u8"Versão do jogo indisponível.",
+                        "Installed game version unavailable.");
     }
     if (EntryMatchesInstalledVersion(entry, title)) {
-        return UiText(state, u8"Compat?vel com a vers?o instalada: ", "Compatible with installed version: ") + title->displayVersion;
+        return UiString(state,
+                        "ui.compatibility.compatible_with_installed_version",
+                        u8"Compatível com a versão instalada: ",
+                        "Compatible with installed version: ") +
+               title->displayVersion;
     }
 
     std::string message = UiText(state,
@@ -3967,25 +4066,23 @@ std::string MakeSaveAvailabilitySummaryLocalized(const AppState& state,
                                                  const CatalogEntry& entry,
                                                  const InstalledTitle* installedTitle) {
     const std::string variantsSummary = EntryHasVariants(entry) ? VariantListSummary(entry) : std::string();
-    if (!UseEnglish(state)) {
-        if (installedTitle != nullptr) {
-            return u8"Backup pronto para extração em JKSV. Restaure-o manualmente pelo JKSV no título detectado.";
-        }
-        if (!variantsSummary.empty()) {
-            return u8"Título não detectado no console/emulador. O backup será extraído em JKSV para restauração manual. Variantes disponíveis: " +
-                   variantsSummary;
-        }
-        return u8"Título não detectado no console/emulador. O backup será extraído em JKSV para restauração manual.";
-    }
-
     if (installedTitle != nullptr) {
-        return "Backup ready to extract under JKSV. Restore it manually with JKSV for the detected title.";
+        return UiString(state,
+                        "ui.save.summary.install_remove",
+                        u8"A instalação faz backup do save atual e aplica a variante selecionada. Ao remover, o backup é restaurado.",
+                        "Installing backs up the current save and applies the selected variant. Removing restores the backup.");
     }
     if (!variantsSummary.empty()) {
-        return "Title not detected on the console/emulator. The backup will be extracted under JKSV for manual restore. Available variants: " +
+        return UiString(state,
+                        "ui.save.summary.install_remove_variants",
+                        u8"A instalação faz backup do save atual e aplica a variante selecionada. Variantes disponíveis: ",
+                        "Installing backs up the current save and applies the selected variant. Available variants: ") +
                variantsSummary;
     }
-    return "Title not detected on the console/emulator. The backup will be extracted under JKSV for manual restore.";
+    return UiString(state,
+                    "ui.save.summary.install_remove",
+                    u8"A instalação faz backup do save atual e aplica a variante selecionada. Ao remover, o backup é restaurado.",
+                    "Installing backs up the current save and applies the selected variant. Removing restores the backup.");
 }
 
 std::string TruncateText(const std::string& text, std::size_t maxChars) {
@@ -5029,11 +5126,12 @@ void DrawVariantSelectionDialog(gfx::Canvas& canvas, const AppState& state) {
     const int dialogHeight = VariantSelectDialogHeight(state);
     const int dialogX = VariantSelectDialogX(canvas);
     const int dialogY = VariantSelectDialogY(canvas, state);
-    const int rowStartY = dialogY + 86;
+    const int rowStartY = dialogY + VariantSelectDialogRowStartOffset(state);
+    const int rowCount = std::max(1, static_cast<int>(state.variantSelectIds.size()));
     const int buttonWidth = (dialogWidth - 48) / 2;
     const int leftButtonX = dialogX + 18;
     const int rightButtonX = dialogX + dialogWidth - 18 - buttonWidth;
-    const int buttonY = dialogY + dialogHeight - 56;
+    const int buttonY = rowStartY + rowCount * kVariantSelectRowHeight + std::max(0, rowCount - 1) * kVariantSelectRowGap + 14;
 
     DrawPanel(canvas, dialogX, dialogY, dialogWidth, dialogHeight, palette.detailsFill, palette.detailsBorder);
     gfx::FillRect(canvas, dialogX, dialogY, dialogWidth, 52, palette.contentHeaderFill);
@@ -5496,12 +5594,20 @@ void HandleSelectionAction(AppState& state) {
     InstallReceipt receipt;
     if (FindReceiptForPackage(state.receipts, entry.id, &receipt)) {
         std::string error;
+        if (receipt.installType == "save") {
+            SetProgress(state,
+                        UiString(state, "ui.progress.restoring_save", u8"Restaurando save", "Restoring save"),
+                        entry.name,
+                        20);
+        }
         if (UninstallPackage(receipt, error)) {
             state.statusLine = std::string(UseEnglish(state) ? "Package removed: " : "Pacote removido: ") + entry.name;
             std::string note;
             state.receipts = LoadInstallReceipts(note);
+            ClearProgress(state);
         } else {
             state.statusLine = error;
+            ClearProgress(state);
         }
         return;
     }

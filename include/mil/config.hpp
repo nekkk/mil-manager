@@ -11,6 +11,7 @@ constexpr const char* kConfigRootDir = "sdmc:/switch/mil_manager";
 constexpr const char* kSettingsPath = "sdmc:/switch/mil_manager/settings.ini";
 constexpr const char* kReceiptsDir = "sdmc:/switch/mil_manager/cache/receipts";
 constexpr const char* kCacheDir = "sdmc:/switch/mil_manager/cache";
+constexpr const char* kSaveOpsDir = "sdmc:/switch/mil_manager/cache/save-ops";
 constexpr const char* kCatalogCachePath = "sdmc:/switch/mil_manager/cache/index.json";
 constexpr const char* kCheatsIndexCachePath = "sdmc:/switch/mil_manager/cache/cheats-index.json";
 constexpr const char* kSavesIndexCachePath = "sdmc:/switch/mil_manager/cache/saves-index.json";
