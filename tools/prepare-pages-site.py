@@ -35,6 +35,20 @@ SITE_THUMBS_PACK = SITE_DIR / "thumbs-pack.zip"
 SITE_THUMBS_MANIFEST = SITE_DIR / "thumbs-manifest.json"
 
 
+def copy_tree_contents(source_dir: Path, target_dir: Path) -> None:
+    if target_dir.exists():
+        shutil.rmtree(target_dir)
+    target_dir.mkdir(parents=True, exist_ok=True)
+    for source_path in source_dir.rglob("*"):
+        relative_path = source_path.relative_to(source_dir)
+        target_path = target_dir / relative_path
+        if source_path.is_dir():
+            target_path.mkdir(parents=True, exist_ok=True)
+            continue
+        target_path.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(source_path, target_path)
+
+
 def build_html(index_data: dict) -> str:
     catalog_name = index_data.get("catalogName", "MIL Traducoes")
     channel = index_data.get("channel", "stable")
@@ -149,17 +163,11 @@ def main() -> int:
             target_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source_path, target_path)
     if DIST_THUMBS_DIR.exists():
-        if SITE_THUMBS_DIR.exists():
-            shutil.rmtree(SITE_THUMBS_DIR)
-        shutil.copytree(DIST_THUMBS_DIR, SITE_THUMBS_DIR)
+        copy_tree_contents(DIST_THUMBS_DIR, SITE_THUMBS_DIR)
     if DIST_CHEATS_DIR.exists():
-        if SITE_CHEATS_DIR.exists():
-            shutil.rmtree(SITE_CHEATS_DIR)
-        shutil.copytree(DIST_CHEATS_DIR, SITE_CHEATS_DIR)
+        copy_tree_contents(DIST_CHEATS_DIR, SITE_CHEATS_DIR)
     if DIST_SAVE_PACKS_DIR.exists():
-        if SITE_SAVE_PACKS_DIR.exists():
-            shutil.rmtree(SITE_SAVE_PACKS_DIR)
-        shutil.copytree(DIST_SAVE_PACKS_DIR, SITE_SAVE_PACKS_DIR)
+        copy_tree_contents(DIST_SAVE_PACKS_DIR, SITE_SAVE_PACKS_DIR)
     if DIST_CHEATS_PACK.exists():
         shutil.copyfile(DIST_CHEATS_PACK, SITE_CHEATS_PACK)
     if DIST_CHEATS_MANIFEST.exists():
