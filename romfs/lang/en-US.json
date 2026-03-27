@@ -458,6 +458,14 @@
   "ui": {
     "about": {
       "active_source": "Active source: ",
+      "center": {
+        "link_discord": "dsc.gg/miltraducoes",
+        "link_site": "miltraducoes.com",
+        "links_label": "Check out our work at:",
+        "paragraph1": "Founded in March 2024, M.I.L. Traduções is a small group of people passionate about games who dedicate themselves to translation as a voluntary hobby.",
+        "paragraph2": "Our goal is to help more people dive into the incredible stories, narratives, and universes that games offer, breaking down language barriers and making entertainment accessible to everyone!",
+        "paragraph3": "We do not encourage piracy! Any and all work done by M.I.L. is strictly non-profit. Therefore, we provide—free of charge—ONLY the translation files, mods, and save files."
+      },
       "environment": "Environment: ",
       "loader_info": "Loader info: "
     },

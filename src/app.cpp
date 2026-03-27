@@ -626,6 +626,7 @@ constexpr const char* kThumbPackZipPath = "sdmc:/switch/mil_manager/cache/thumbs
 constexpr const char* kCheatPackRootDir = "sdmc:/switch/mil_manager/cache/cheat-packs";
 constexpr const char* kCheatPackRevisionPath = "sdmc:/switch/mil_manager/cache/cheat-pack-revision.txt";
 constexpr const char* kCheatPackZipPath = "sdmc:/switch/mil_manager/cache/cheats-pack.zip";
+constexpr const char* kCheatsSummaryTempPath = "sdmc:/switch/mil_manager/cache/cheats-summary.json.tmp";
 constexpr const char* kCheatsIndexTempPath = "sdmc:/switch/mil_manager/cache/cheats-index.json.tmp";
 constexpr const char* kSavesIndexTempPath = "sdmc:/switch/mil_manager/cache/saves-index.json.tmp";
 
@@ -1852,6 +1853,24 @@ std::string DeriveCheatsIndexLocation(const std::string& catalogSource) {
     return {};
 }
 
+std::string DeriveCheatsSummaryLocation(const std::string& catalogSource) {
+    if (catalogSource.empty()) {
+        return {};
+    }
+    if (catalogSource == kSwitchLocalIndexPath) {
+        return kSwitchLocalCheatsSummaryPath;
+    }
+    if (catalogSource == kCatalogCachePath) {
+        return kCheatsSummaryCachePath;
+    }
+    if ((catalogSource.rfind("http://", 0) == 0 || catalogSource.rfind("https://", 0) == 0) &&
+        catalogSource.size() >= 10 &&
+        catalogSource.substr(catalogSource.size() - 10) == "index.json") {
+        return catalogSource.substr(0, catalogSource.size() - 10) + "cheats-summary.json";
+    }
+    return {};
+}
+
 std::string DeriveCheatsPackLocation(const std::string& cheatsIndexSource) {
     if (cheatsIndexSource.empty()) {
         return {};
@@ -1933,8 +1952,6 @@ bool LoadCheatsIndex(AppState& state,
         }
         ApplyCheatPackDefaults(localIndex, path);
         state.cheatsIndex = std::move(localIndex);
-        std::string packError;
-        EnsureCheatPackCache(state.cheatsIndex, packError, false);
         state.cheatsIndexFiltered = false;
         PopulateDetectedCheatBuildIds(state, !IsRyujinxGuestEnvironment());
         FilterCheatsIndexToDetectedTitles(state);
@@ -1943,8 +1960,17 @@ bool LoadCheatsIndex(AppState& state,
         return true;
     };
 
-    const std::string derivedSource = DeriveCheatsIndexLocation(state.activeCatalogSource);
-    if (derivedSource == kSwitchLocalCheatsIndexPath && tryLoadLocalCheats(kSwitchLocalCheatsIndexPath)) {
+    const std::string derivedSummarySource = DeriveCheatsSummaryLocation(state.activeCatalogSource);
+    const std::string derivedIndexSource = DeriveCheatsIndexLocation(state.activeCatalogSource);
+    if (derivedSummarySource == kSwitchLocalCheatsSummaryPath && tryLoadLocalCheats(kSwitchLocalCheatsSummaryPath)) {
+        return true;
+    }
+
+    if (derivedIndexSource == kSwitchLocalCheatsIndexPath && tryLoadLocalCheats(kSwitchLocalCheatsIndexPath)) {
+        return true;
+    }
+
+    if (tryLoadLocalCheats(kSwitchLocalCheatsSummaryPath)) {
         return true;
     }
 
@@ -1952,8 +1978,22 @@ bool LoadCheatsIndex(AppState& state,
         return true;
     }
 
+    if (preferLocalCache && tryLoadLocalCheats(kCheatsSummaryCachePath)) {
+        return true;
+    }
+
     if (preferLocalCache && tryLoadLocalCheats(kCheatsIndexCachePath)) {
         return true;
+    }
+
+    if (FileExists(kCheatsSummaryTempPath)) {
+        if (tryLoadLocalCheats(kCheatsSummaryTempPath)) {
+            remove(kCheatsSummaryCachePath);
+            std::rename(kCheatsSummaryTempPath, kCheatsSummaryCachePath);
+            state.activeCheatsSource = kCheatsSummaryCachePath;
+            return true;
+        }
+        remove(kCheatsSummaryTempPath);
     }
 
     if (FileExists(kCheatsIndexTempPath)) {
@@ -1980,8 +2020,10 @@ bool LoadCheatsIndex(AppState& state,
             }
         };
 
-        appendRemoteSource(derivedSource);
+        appendRemoteSource(derivedSummarySource);
+        appendRemoteSource(derivedIndexSource);
         for (const std::string& catalogUrl : state.config.catalogUrls) {
+            appendRemoteSource(DeriveCheatsSummaryLocation(catalogUrl));
             appendRemoteSource(DeriveCheatsIndexLocation(catalogUrl));
         }
 
@@ -2003,7 +2045,9 @@ bool LoadCheatsIndex(AppState& state,
             options.progressCallback = UpdateUiDownloadProgress;
             options.progressUserData = &indexProgress;
 
-            const std::string tempPath = kCheatsIndexTempPath;
+            const bool isSummarySource =
+                remoteSource.size() >= 19 && remoteSource.substr(remoteSource.size() - 19) == "cheats-summary.json";
+            const std::string tempPath = isSummarySource ? kCheatsSummaryTempPath : kCheatsIndexTempPath;
             std::size_t downloadedBytes = 0;
             if (!HttpDownloadToFileWithOptions(remoteSource, tempPath, options, &downloadedBytes, error) ||
                 downloadedBytes == 0) {
@@ -2019,23 +2063,12 @@ bool LoadCheatsIndex(AppState& state,
             }
 
             ApplyCheatPackDefaults(remoteIndex, remoteSource);
-            std::string packError;
-            UiDownloadProgressContext packProgress{
-                &state,
-                UiText(state, u8"Carregando trapaças", "Loading cheats"),
-                u8"Baixando pacote de trapaças...",
-                "Downloading cheats pack...",
-                60,
-                30};
-            EnsureCheatPackCache(remoteIndex,
-                                 packError,
-                                 allowRemotePackDownload || !IsRyujinxGuestEnvironment(),
-                                 &packProgress);
-            const std::string existingCache = ReadTextFile(kCheatsIndexCachePath);
+            const char* cachePath = isSummarySource ? kCheatsSummaryCachePath : kCheatsIndexCachePath;
+            const std::string existingCache = ReadTextFile(cachePath);
             const std::string downloadedCache = ReadTextFile(tempPath);
             if (existingCache != downloadedCache) {
-                remove(kCheatsIndexCachePath);
-                std::rename(tempPath.c_str(), kCheatsIndexCachePath);
+                remove(cachePath);
+                std::rename(tempPath.c_str(), cachePath);
             } else {
                 remove(tempPath.c_str());
             }
@@ -2851,6 +2884,10 @@ const CheatEntryRecord* BestCheatEntryForBuild(const CheatBuildRecord& build) {
 
 std::string CheatBuildLabel(const CheatBuildRecord& build) {
     std::string label = build.buildId;
+    if (!build.categories.empty()) {
+        label += " • " + JoinLabels(build.categories, ", ");
+        return label;
+    }
     const CheatEntryRecord* best = BestCheatEntryForBuild(build);
     if (best != nullptr && !best->categories.empty()) {
         label += " • " + JoinLabels(best->categories, ", ");
@@ -2979,6 +3016,12 @@ std::vector<std::string> CollectCheatCategoriesLocalized(const AppState& state, 
 std::vector<std::string> CollectCheatSourcesLocalized(const AppState& state, const CheatTitleRecord& title) {
     std::vector<std::string> labels;
     for (const auto& build : title.builds) {
+        if (!build.primarySource.empty()) {
+            AppendUniqueString(labels, LocalizedCheatSourceLabel(state, build.primarySource));
+        }
+        for (const auto& source : build.sources) {
+            AppendUniqueString(labels, LocalizedCheatSourceLabel(state, source));
+        }
         for (const auto& entry : build.entries) {
             if (!entry.primarySource.empty()) {
                 AppendUniqueString(labels, LocalizedCheatSourceLabel(state, entry.primarySource));
@@ -3040,12 +3083,18 @@ std::string CheatCardSubtitle(const AppState& state, const CatalogEntry& entry, 
         }
 
         const CheatEntryRecord* bestEntry = BestCheatEntryForBuild(*preferredBuild);
-        if (bestEntry != nullptr) {
+        if (bestEntry != nullptr || !preferredBuild->primarySource.empty() || !preferredBuild->sources.empty()) {
             std::vector<std::string> sources;
-            if (!bestEntry->primarySource.empty()) {
+            if (bestEntry != nullptr && !bestEntry->primarySource.empty()) {
                 AppendUniqueString(sources, LocalizedCheatSourceLabel(state, bestEntry->primarySource));
             }
-            for (const auto& source : bestEntry->sources) {
+            for (const auto& source : (bestEntry != nullptr ? bestEntry->sources : std::vector<std::string>{})) {
+                AppendUniqueString(sources, LocalizedCheatSourceLabel(state, source));
+            }
+            if (!preferredBuild->primarySource.empty()) {
+                AppendUniqueString(sources, LocalizedCheatSourceLabel(state, preferredBuild->primarySource));
+            }
+            for (const auto& source : preferredBuild->sources) {
                 AppendUniqueString(sources, LocalizedCheatSourceLabel(state, source));
             }
             const std::string sourceSummary = SummarizeLabelList(sources, 2);
@@ -3432,7 +3481,7 @@ bool InstallResolvedEntry(AppState& state, const CatalogEntry& entry, const Cata
 
 bool InstallCheatBuild(AppState& state, const CatalogEntry& entry, const CheatBuildRecord& build) {
     const CheatEntryRecord* cheatEntry = BestCheatEntryForBuild(build);
-    if (cheatEntry == nullptr) {
+    if (cheatEntry == nullptr && build.downloadUrl.empty() && build.relativePath.empty()) {
         state.statusLine = UiText(state,
                                   "Nenhum arquivo de cheat disponível para este build.",
                                   "No cheat file is available for this build.");
@@ -3462,32 +3511,31 @@ bool InstallCheatBuild(AppState& state, const CatalogEntry& entry, const CheatBu
     std::string error;
     bool installed = false;
 
-    if (!cheatEntry->relativePath.empty()) {
-        std::string cheatPackError;
-        if (EnsureCheatPackCache(state.cheatsIndex, cheatPackError)) {
-            const std::string packPath = CheatPackPathForEntry(state.cheatsIndex, *cheatEntry);
-            if (FileHasContent(packPath)) {
-                installed = InstallCheatTextFromFile(entry, build.buildId, packPath, installedTitle, newReceipt, error);
-            }
-        } else {
-            error = cheatPackError;
-        }
+    std::string localCheatPath;
+    if (!build.relativePath.empty()) {
+        localCheatPath = std::string(kCacheDir) + "/" + build.relativePath;
+    } else if (cheatEntry != nullptr && !cheatEntry->relativePath.empty()) {
+        localCheatPath = std::string(kCacheDir) + "/" + cheatEntry->relativePath;
     }
 
-    if (!installed && !cheatEntry->downloadUrl.empty() && !IsRyujinxGuestEnvironment()) {
+    if (!localCheatPath.empty() && FileHasContent(localCheatPath)) {
+        installed = InstallCheatTextFromFile(entry, build.buildId, localCheatPath, installedTitle, newReceipt, error);
+    }
+
+    std::string downloadUrl = build.downloadUrl;
+    if (downloadUrl.empty() && cheatEntry != nullptr) {
+        downloadUrl = cheatEntry->downloadUrl;
+    }
+
+    if (!installed && !downloadUrl.empty()) {
         installed = InstallCheatText(entry,
                                      build.buildId,
-                                     cheatEntry->downloadUrl,
+                                     downloadUrl,
                                      installedTitle,
                                      newReceipt,
                                      error,
                                      UpdateUiDownloadProgress,
                                      &downloadProgress);
-    }
-
-    if (!installed && IsRyujinxGuestEnvironment() && error.empty()) {
-        error = UseEnglish(state) ? "Ryujinx requires local synced cheat cache."
-                                  : "Ryujinx requer cache local sincronizado de cheats.";
     }
 
     if (installed) {
@@ -4052,9 +4100,10 @@ std::string MakeCheatAvailabilitySummaryLocalized(const AppState& state,
         const CheatEntryRecord* best = BestCheatEntryForBuild(*build);
         std::string message = std::string(UiText(state, "Cheat publicado para o build detectado: ", "Cheat published for detected build: ")) +
                               build->buildId;
-        if (best != nullptr && !best->primarySource.empty()) {
+        const std::string source = best != nullptr && !best->primarySource.empty() ? best->primarySource : build->primarySource;
+        if (!source.empty()) {
             message += std::string(" • ") + UiText(state, "Origem: ", "Source: ") +
-                       LocalizedCheatSourceLabel(state, best->primarySource);
+                       LocalizedCheatSourceLabel(state, source);
         }
         return message;
     }
@@ -4649,6 +4698,74 @@ void DrawCheatsEmptyState(gfx::Canvas& canvas, const AppState& state, int x, int
                          4);
 }
 
+void DrawAboutCenterContent(gfx::Canvas& canvas, const AppState& state, int x, int y, int width, int height) {
+    const ThemePalette palette = GetThemePalette(state);
+    DrawPanel(canvas, x, y, width, height, palette.emptyFill, palette.emptyBorder);
+
+    int cursorY = y + 26;
+    cursorY += gfx::DrawTextWrapped(canvas,
+                                    x + 22,
+                                    cursorY,
+                                    width - 44,
+                                    UiString(state,
+                                             "ui.about.center.paragraph1",
+                                             "Criada em março de 2024, a M.I.L. Traduções é um formada por um pequeno grupo de pessoas, apaixonadas por games, que se dedicam à tradução como um passatempo e de forma voluntária.",
+                                             "Founded in March 2024, M.I.L. Traduções is a small group of people passionate about games who dedicate themselves to translation as a voluntary hobby."),
+                                    palette.primaryText,
+                                    1,
+                                    7);
+    cursorY += 16;
+    cursorY += gfx::DrawTextWrapped(canvas,
+                                    x + 22,
+                                    cursorY,
+                                    width - 44,
+                                    UiString(state,
+                                             "ui.about.center.paragraph2",
+                                             "Com isso desejamos que mais pessoas possam mergulhar nas histórias, narrativas e universos incríveis que os jogos oferecem, eliminando as barreiras linguísticas e tornando o entretenimento acessível para todos!",
+                                             "Our goal is to help more people dive into the incredible stories, narratives, and universes that games offer, breaking down language barriers and making entertainment accessible to everyone!"),
+                                    palette.primaryText,
+                                    1,
+                                    7);
+    cursorY += 16;
+    cursorY += gfx::DrawTextWrapped(canvas,
+                                    x + 22,
+                                    cursorY,
+                                    width - 44,
+                                    UiString(state,
+                                             "ui.about.center.paragraph3",
+                                             "Não incentivamos a pirataria! Todo e qualquer trabalho feito pela M.I.L. é inteiramente sem fins lucrativos. Logo, aqui disponibilizamos, de forma gratuita, APENAS os arquivos de tradução, modificações e salvamentos.",
+                                             "We do not encourage piracy! Any and all work done by M.I.L. is strictly non-profit. Therefore, we provide—free of charge—ONLY the translation files, mods, and save files."),
+                                    palette.warningText,
+                                    1,
+                                    8);
+    cursorY += 18;
+    cursorY += gfx::DrawTextWrapped(canvas,
+                                    x + 22,
+                                    cursorY,
+                                    width - 44,
+                                    UiString(state,
+                                             "ui.about.center.links_label",
+                                             "Conheça nosso trabalho em:",
+                                             "Check out our work at:"),
+                                    palette.accentText,
+                                    1,
+                                    3);
+    cursorY += 6;
+    gfx::DrawText(canvas,
+                  x + 22,
+                  cursorY,
+                  UiString(state, "ui.about.center.link_site", "miltraducoes.com", "miltraducoes.com"),
+                  palette.primaryText,
+                  1);
+    cursorY += gfx::LineHeight(1) + 6;
+    gfx::DrawText(canvas,
+                  x + 22,
+                  cursorY,
+                  UiString(state, "ui.about.center.link_discord", "dsc.gg/miltraducoes", "dsc.gg/miltraducoes"),
+                  palette.primaryText,
+                  1);
+}
+
 void DrawSaveGamesEmptyState(gfx::Canvas& canvas, const AppState& state, int x, int y, int width, int height) {
     const ThemePalette palette = GetThemePalette(state);
     DrawPanel(canvas, x, y, width, height, palette.emptyFill, palette.emptyBorder);
@@ -4694,6 +4811,11 @@ void DrawEntryList(gfx::Canvas& canvas,
                                 std::string(UiString(state, "ui.label.sort_prefix", "Ordem: ", "Sort: ")) + SortModeLabel(state, state.sortMode),
                                 palette.headerMetaText,
                                 1);
+
+    if (state.section == ContentSection::About) {
+        DrawAboutCenterContent(canvas, state, x + 18, y + 96, width - 36, height - 114);
+        return;
+    }
 
     if (items.empty()) {
         if (state.section == ContentSection::Cheats) {

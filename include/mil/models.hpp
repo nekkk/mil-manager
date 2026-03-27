@@ -106,6 +106,14 @@ struct CheatEntryRecord {
 struct CheatBuildRecord {
     std::string buildId;
     std::vector<std::string> categories;
+    std::string primarySource;
+    std::vector<std::string> sources;
+    std::string contentHash;
+    int cheatCount = 0;
+    int lineCount = 0;
+    std::string relativePath;
+    std::string downloadUrl;
+    int priorityRank = 0;
     std::vector<CheatEntryRecord> entries;
 };
 

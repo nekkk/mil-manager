@@ -458,6 +458,14 @@
   "ui": {
     "about": {
       "active_source": "Fonte ativa: ",
+      "center": {
+        "link_discord": "dsc.gg/miltraducoes",
+        "link_site": "miltraducoes.com",
+        "links_label": "Conheça nosso trabalho em:",
+        "paragraph1": "Criada em março de 2024, a M.I.L. Traduções é um formada por um pequeno grupo de pessoas, apaixonadas por games, que se dedicam à tradução como um passatempo e de forma voluntária.",
+        "paragraph2": "Com isso desejamos que mais pessoas possam mergulhar nas histórias, narrativas e universos incríveis que os jogos oferecem, eliminando as barreiras linguísticas e tornando o entretenimento acessível para todos!",
+        "paragraph3": "Não incentivamos a pirataria! Todo e qualquer trabalho feito pela M.I.L. é inteiramente sem fins lucrativos. Logo, aqui disponibilizamos, de forma gratuita, APENAS os arquivos de tradução, modificações e salvamentos."
+      },
       "environment": "Ambiente: ",
       "loader_info": "Loader info: "
     },

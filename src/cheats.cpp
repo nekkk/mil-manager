@@ -74,6 +74,14 @@ bool ParseCheatEntry(const picojson::object& object, CheatEntryRecord& entry) {
 bool ParseCheatBuild(const picojson::object& object, CheatBuildRecord& build) {
     build.buildId = ToLowerAscii(GetString(object, "buildId"));
     build.categories = GetStringArray(object, "categories");
+    build.primarySource = GetString(object, "primarySource");
+    build.sources = GetStringArray(object, "sources");
+    build.contentHash = GetString(object, "contentHash");
+    build.cheatCount = GetInt(object, "cheatCount");
+    build.lineCount = GetInt(object, "lineCount");
+    build.relativePath = GetString(object, "relativePath");
+    build.downloadUrl = GetString(object, "downloadUrl");
+    build.priorityRank = GetInt(object, "priorityRank");
     const auto entriesIt = object.find("entries");
     if (entriesIt != object.end() && entriesIt->second.is<picojson::array>()) {
         for (const auto& item : entriesIt->second.get<picojson::array>()) {
@@ -86,7 +94,8 @@ bool ParseCheatBuild(const picojson::object& object, CheatBuildRecord& build) {
             }
         }
     }
-    return !build.buildId.empty() && !build.entries.empty();
+    return !build.buildId.empty() &&
+           (!build.entries.empty() || !build.downloadUrl.empty() || !build.relativePath.empty());
 }
 
 bool ParseCheatTitle(const picojson::object& object, CheatTitleRecord& title) {

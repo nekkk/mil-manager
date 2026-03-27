@@ -499,7 +499,10 @@ def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, ca
     if DIST_CHEATS_DIR.exists():
         for path in DIST_CHEATS_DIR.rglob("*"):
             if path.is_file():
-                path.unlink()
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
         for path in sorted(DIST_CHEATS_DIR.rglob("*"), reverse=True):
             if path.is_dir():
                 try:
@@ -533,10 +536,19 @@ def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, ca
             {
                 "buildId": entry.build_id,
                 "categories": set(),
+                "sources": set(),
+                "primarySource": "",
+                "priorityRank": 999,
+                "contents": [],
                 "entries": [],
             },
         )
         build_bucket["categories"].update(entry.categories)
+        build_bucket["sources"].update(entry.sources)
+        build_bucket["contents"].append(entry.content)
+        if not build_bucket["primarySource"]:
+            build_bucket["primarySource"] = min(entry.sources, key=lambda item: item)
+        build_bucket["priorityRank"] = min(int(build_bucket["priorityRank"]), int(entry.priority_rank))
         build_bucket["entries"].append(
             {
                 "id": entry_id,
@@ -565,6 +577,14 @@ def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, ca
         for build_id in sorted(title_bucket["builds"].keys()):
             build_bucket = title_bucket["builds"][build_id]
             build_bucket["entries"].sort(key=lambda item: (item["priorityRank"], item["title"], item["id"]))
+            combined_text = normalize_cheat_text("\n\n".join(build_bucket["contents"]))
+            build_relative_path = Path("cheats") / title_bucket["titleId"] / f"{build_id}.txt"
+            build_output_path = DIST_DIR / build_relative_path
+            build_output_path.parent.mkdir(parents=True, exist_ok=True)
+            build_output_path.write_text(combined_text, encoding="utf-8")
+            build_cheat_count = count_cheat_blocks(combined_text)
+            build_line_count = len([line for line in combined_text.splitlines() if line.strip()])
+            build_content_hash = hashlib.sha256(combined_text.encode("utf-8")).hexdigest()
             for item in build_bucket["entries"]:
                 title_categories.update(item["categories"])
                 title_sources.update(item["sources"])
@@ -573,6 +593,14 @@ def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, ca
                 {
                     "buildId": build_id,
                     "categories": sorted(build_bucket["categories"]),
+                    "primarySource": build_bucket["primarySource"],
+                    "sources": sorted(build_bucket["sources"]),
+                    "contentHash": f"sha256:{build_content_hash}",
+                    "cheatCount": build_cheat_count,
+                    "lineCount": build_line_count,
+                    "relativePath": str(build_relative_path).replace("\\", "/"),
+                    "downloadUrl": public_base_url + str(build_relative_path).replace("\\", "/"),
+                    "priorityRank": int(build_bucket["priorityRank"]),
                     "entries": build_bucket["entries"],
                 }
             )
@@ -591,6 +619,21 @@ def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, ca
                 "sources": sorted(title_sources),
                 "buildCount": len(builds),
                 "cheatCount": total_cheat_count,
+                "builds": [
+                    {
+                        "buildId": build["buildId"],
+                        "categories": build["categories"],
+                        "primarySource": build["primarySource"],
+                        "sources": build["sources"],
+                        "contentHash": build["contentHash"],
+                        "cheatCount": build["cheatCount"],
+                        "lineCount": build["lineCount"],
+                        "relativePath": build["relativePath"],
+                        "downloadUrl": build["downloadUrl"],
+                        "priorityRank": build["priorityRank"],
+                    }
+                    for build in builds
+                ],
             }
         )
 
