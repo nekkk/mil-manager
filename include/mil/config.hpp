@@ -6,7 +6,7 @@
 
 namespace mil {
 
-constexpr const char* kDefaultCatalogUrl = "https://nekkk.github.io/mil-manager-catalog/index.json";
+constexpr const char* kDefaultCatalogUrl = "https://nekkk.github.io/mil-manager-delivery/index.json";
 constexpr const char* kConfigRootDir = "sdmc:/switch/mil_manager";
 constexpr const char* kSettingsPath = "sdmc:/switch/mil_manager/settings.ini";
 constexpr const char* kReceiptsDir = "sdmc:/switch/mil_manager/cache/receipts";
