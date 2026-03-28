@@ -48,6 +48,9 @@ function Sync-DeliveryTree {
     $sourceItems = Get-ChildItem -LiteralPath $SourceRoot -Force
     $sourceNames = @{}
     foreach ($item in $sourceItems) {
+        if ($item.Name -eq "admin") {
+            continue
+        }
         $sourceNames[$item.Name] = $true
     }
 
@@ -56,6 +59,9 @@ function Sync-DeliveryTree {
         Remove-Item -Recurse -Force
 
     foreach ($item in $sourceItems) {
+        if ($item.Name -eq "admin") {
+            continue
+        }
         $targetPath = Join-Path $TargetRoot $item.Name
         if ($item.PSIsContainer) {
             Invoke-RobocopyMirror -SourcePath $item.FullName -TargetPath $targetPath
@@ -160,7 +166,6 @@ function Invoke-BatchedPublish {
         "cheats-pack.zip",
         "thumbs-manifest.json",
         "thumbs-pack.zip",
-        "admin",
         "thumbs",
         "delivery/cheats",
         "delivery/packages",

@@ -143,7 +143,6 @@ def build_html(index_data: dict) -> str:
       <li>Use este endpoint no app via <code>catalog_url=https://seu-endereco/index.json</code>.</li>
       <li>Os pacotes ZIP podem continuar hospedados no MEGA ou em outra origem.</li>
       <li>O conteudo deste site e gerado automaticamente a partir de <code>catalog-source/</code>.</li>
-      <li>Painel administrativo: <code>/admin/</code></li>
     </ul>
   </main>
 </body>
@@ -158,11 +157,15 @@ def main() -> int:
     index_data = json.loads(DIST_INDEX.read_text(encoding="utf-8"))
 
     SITE_DIR.mkdir(parents=True, exist_ok=True)
+    if (SITE_DIR / "admin").exists():
+        shutil.rmtree(SITE_DIR / "admin")
     if SITE_SRC_DIR.exists():
         for source_path in SITE_SRC_DIR.rglob("*"):
             if source_path.is_dir():
                 continue
             relative_path = source_path.relative_to(SITE_SRC_DIR)
+            if relative_path.parts and relative_path.parts[0] == "admin":
+                continue
             target_path = SITE_DIR / relative_path
             target_path.parent.mkdir(parents=True, exist_ok=True)
             shutil.copyfile(source_path, target_path)
