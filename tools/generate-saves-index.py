@@ -33,7 +33,7 @@ TITLEDB_NAME_SOURCES = {
 }
 HTTP_CACHE_TTL_SECONDS = 24 * 60 * 60
 TITLEDB_CACHE_TTL_SECONDS = 24 * 60 * 60
-DEFAULT_PUBLIC_BASE_URL = "https://nekkk.github.io/mil-manager-catalog/"
+DEFAULT_PUBLIC_BASE_URL = "https://nekkk.github.io/mil-manager-delivery/"
 
 LANGUAGE_HINTS = {
     "ESP": "es",

@@ -37,7 +37,7 @@ TITLEDB_NAME_SOURCES = {
 TITLEDB_NAME_CACHE_TTL_SECONDS = 24 * 60 * 60
 HTTP_CACHE_TTL_SECONDS = 24 * 60 * 60
 MAX_FETCH_WORKERS = 16
-DEFAULT_PUBLIC_BASE_URL = "https://nekkk.github.io/mil-manager-catalog/"
+DEFAULT_PUBLIC_BASE_URL = "https://nekkk.github.io/mil-manager-delivery/"
 TXT_PATH_PATTERNS = [
     re.compile(r"titles/(?P<title>[0-9A-Fa-f]{16})/cheats/(?P<build>[0-9A-Fa-f]{16})\.txt$"),
     re.compile(r"atmosphere/titles/(?P<title>[0-9A-Fa-f]{16})/cheats/(?P<build>[0-9A-Fa-f]{16})\.txt$"),

@@ -36,7 +36,7 @@ DIST_THUMBS_PACK_PATH = ROOT / "dist" / "thumbs-pack.zip"
 DIST_THUMBS_MANIFEST_PATH = ROOT / "dist" / "thumbs-manifest.json"
 ARTWORK_MANIFEST_PATH = CACHE_DIR / "artwork-manifest.json"
 PACKAGE_CACHE_DIR = ROOT / ".cache" / "packages"
-DEFAULT_PUBLIC_BASE_URL = "https://nekkk.github.io/mil-manager-catalog/"
+DEFAULT_PUBLIC_BASE_URL = "https://nekkk.github.io/mil-manager-delivery/"
 THUMB_SIZE = 110
 
 REQUIRED_FIELDS = ("id", "section", "titleId")
