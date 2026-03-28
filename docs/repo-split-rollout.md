@@ -121,3 +121,18 @@ powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-delivery.ps1 -Co
 4. Nenhum JSON público contém `downloadUrl`
 5. O cache local não usa nomes legíveis de pacote
 6. O delivery público não contém código-fonte nem painel admin
+
+## Backlog operacional apos o split
+
+1. Avaliar necessidade de atualizar o `mil-manager-catalog` sempre que houver mudancas no schema, no painel admin ou no delivery.
+2. Automatizar a publicacao diferencial do `mil-manager-delivery` em cadencia de 3 em 3 dias.
+3. Revisar tools e comentarios para trocar nomes especificos de emuladores por referencias genericas a `emuladores`.
+4. Garantir que `mil-manager-delivery` nunca publique:
+   - painel admin
+   - fontes privadas
+   - URLs reais
+5. Documentar o fluxo manual e automatico entre:
+   - `mil-manager`
+   - `mil-manager-catalog`
+   - `mil-manager-delivery`
+6. Registrar cada item implementado do rollout com commit proprio.
