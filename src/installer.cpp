@@ -25,6 +25,99 @@ namespace {
 
 constexpr std::uint64_t kDownloadFreeSpaceMarginBytes = 64ULL * 1024ULL * 1024ULL;
 
+bool EnsureDirectory(const std::string& path);
+
+std::string ToHexLower(std::uint64_t value) {
+    std::ostringstream stream;
+    stream << std::hex << std::nouppercase << value;
+    return stream.str();
+}
+
+std::uint64_t Fnv1a64(const std::string& value) {
+    std::uint64_t hash = 14695981039346656037ull;
+    for (const unsigned char ch : value) {
+        hash ^= static_cast<std::uint64_t>(ch);
+        hash *= 1099511628211ull;
+    }
+    return hash;
+}
+
+std::string StripHashPrefix(const std::string& value) {
+    const std::size_t separator = value.find(':');
+    if (separator == std::string::npos) {
+        return value;
+    }
+    return value.substr(separator + 1);
+}
+
+std::string BaseName(const std::string& path) {
+    const std::size_t separator = path.find_last_of('/');
+    if (separator == std::string::npos) {
+        return path;
+    }
+    return path.substr(separator + 1);
+}
+
+std::string ExtensionFromPath(const std::string& path) {
+    const std::string fileName = BaseName(path);
+    const std::size_t separator = fileName.find_last_of('.');
+    if (separator == std::string::npos || separator == 0) {
+        return {};
+    }
+    return fileName.substr(separator);
+}
+
+std::string CacheAssetToken(const std::string& assetId,
+                            const std::string& contentHash,
+                            const std::string& fallbackKey) {
+    if (!contentHash.empty()) {
+        return StripHashPrefix(contentHash);
+    }
+    if (!assetId.empty()) {
+        return assetId;
+    }
+    return ToHexLower(Fnv1a64(fallbackKey));
+}
+
+std::string ResolveAssetExtension(const std::string& relativePath,
+                                  const std::string& downloadUrl,
+                                  const char* defaultExtension) {
+    if (const std::string extension = ExtensionFromPath(relativePath); !extension.empty()) {
+        return extension;
+    }
+    if (const std::string extension = ExtensionFromPath(downloadUrl); !extension.empty()) {
+        return extension;
+    }
+    return defaultExtension ? std::string(defaultExtension) : std::string();
+}
+
+std::string CacheDownloadPath(const std::string& category,
+                              const std::string& assetId,
+                              const std::string& contentHash,
+                              const std::string& fallbackKey,
+                              const std::string& relativePath,
+                              const std::string& downloadUrl,
+                              const char* defaultExtension) {
+    const std::string token = CacheAssetToken(assetId, contentHash, fallbackKey);
+    const std::string extension = ResolveAssetExtension(relativePath, downloadUrl, defaultExtension);
+    const std::string prefix = token.size() >= 2 ? token.substr(0, 2) : std::string("xx");
+    const std::string directory = std::string(kCacheDir) + "/assets/" + category + "/" + prefix;
+    EnsureDirectory(directory);
+    return directory + "/" + token + extension;
+}
+
+std::string ReceiptSourceReference(const std::string& assetId,
+                                   const std::string& relativePath,
+                                   const std::string& downloadUrl) {
+    if (!assetId.empty()) {
+        return "asset:" + assetId;
+    }
+    if (!relativePath.empty()) {
+        return "delivery:" + relativePath;
+    }
+    return downloadUrl;
+}
+
 bool EnsureDirectory(const std::string& path) {
     if (path.empty()) {
         return false;
@@ -1744,7 +1837,13 @@ bool InstallPackage(const CatalogEntry& entry,
     EnsureDirectory(kConfigRootDir);
     EnsureDirectory(kCacheDir);
 
-    const std::string zipPath = std::string(kCacheDir) + "/" + entry.id + ".zip";
+    const std::string zipPath = CacheDownloadPath("packages",
+                                                  entry.assetId,
+                                                  entry.contentHash,
+                                                  entry.id + ":" + entry.downloadUrl,
+                                                  entry.relativePath,
+                                                  entry.downloadUrl,
+                                                  ".zip");
     HttpDownloadInfo downloadInfo;
     std::string downloadInfoError;
     const bool hasDownloadInfo = HttpGetDownloadInfo(entry.downloadUrl, downloadInfo, downloadInfoError);
@@ -1794,7 +1893,7 @@ bool InstallPackage(const CatalogEntry& entry,
     receipt.packageVersion = entry.packageVersion;
     receipt.titleId = ToLowerAscii(entry.titleId);
     receipt.installRoot = InstallRootForEntry(entry);
-    receipt.sourceUrl = entry.downloadUrl;
+    receipt.sourceUrl = ReceiptSourceReference(entry.assetId, entry.relativePath, entry.downloadUrl);
     receipt.installedAt = CurrentTimestamp();
     receipt.gameVersion = installedTitle ? installedTitle->displayVersion : std::string();
     receipt.files = std::move(extractedFiles);
@@ -1836,7 +1935,13 @@ bool InstallCheatText(const CatalogEntry& entry,
         return false;
     }
 
-    const std::string tempPath = std::string(kCacheDir) + "/" + entry.id + "-" + normalizedBuildId + ".txt";
+    const std::string tempPath = CacheDownloadPath("cheats",
+                                                   std::string(),
+                                                   std::string(),
+                                                   entry.id + ":" + normalizedBuildId + ":" + downloadUrl,
+                                                   std::string(),
+                                                   downloadUrl,
+                                                   ".txt");
     std::size_t bytesDownloaded = 0;
     HttpDownloadOptions options;
     options.probeDownloadInfo = false;
@@ -1886,7 +1991,7 @@ bool InstallCheatText(const CatalogEntry& entry,
     receipt.packageVersion = entry.packageVersion.empty() ? normalizedBuildId : entry.packageVersion;
     receipt.titleId = normalizedTitleId;
     receipt.installRoot = cheatDir;
-    receipt.sourceUrl = downloadUrl;
+    receipt.sourceUrl = ReceiptSourceReference(std::string(), std::string(), downloadUrl);
     receipt.installedAt = CurrentTimestamp();
     receipt.gameVersion = installedTitle ? installedTitle->displayVersion : std::string();
     receipt.files = {destinationPath};
@@ -1955,7 +2060,7 @@ bool InstallCheatTextFromFile(const CatalogEntry& entry,
     receipt.packageVersion = entry.packageVersion.empty() ? normalizedBuildId : entry.packageVersion;
     receipt.titleId = normalizedTitleId;
     receipt.installRoot = cheatDir;
-    receipt.sourceUrl = sourcePath;
+    receipt.sourceUrl = ReceiptSourceReference(std::string(), std::string(), sourcePath);
     receipt.installedAt = CurrentTimestamp();
     receipt.gameVersion = installedTitle ? installedTitle->displayVersion : std::string();
     receipt.files = {destinationPath};
@@ -1991,7 +2096,13 @@ bool InstallSaveData(const CatalogEntry& entry,
         return false;
     }
 
-    const std::string zipPath = std::string(kCacheDir) + "/" + entry.id + "-" + variant.id + ".zip";
+    const std::string zipPath = CacheDownloadPath("saves",
+                                                  variant.assetId,
+                                                  !variant.contentHash.empty() ? variant.contentHash : variant.sha256,
+                                                  entry.id + ":" + variant.id + ":" + variant.downloadUrl,
+                                                  variant.relativePath,
+                                                  variant.downloadUrl,
+                                                  ".zip");
     std::size_t bytesDownloaded = 0;
     HttpDownloadOptions downloadOptions;
     downloadOptions.progressCallback = progressCallback;
@@ -2191,7 +2302,7 @@ bool InstallSaveData(const CatalogEntry& entry,
     receipt.packageVersion = entry.packageVersion;
     receipt.titleId = ToLowerAscii(entry.titleId);
     receipt.installRoot = installRoot;
-    receipt.sourceUrl = variant.downloadUrl;
+    receipt.sourceUrl = ReceiptSourceReference(variant.assetId, variant.relativePath, variant.downloadUrl);
     receipt.installedAt = CurrentTimestamp();
     receipt.gameVersion = installedTitle ? installedTitle->displayVersion : std::string();
     receipt.installType = "save";

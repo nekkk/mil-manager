@@ -10,6 +10,7 @@ DIST_INDEX = ROOT / "dist" / "index.json"
 DIST_CHEATS_INDEX = ROOT / "dist" / "cheats-index.json"
 DIST_CHEATS_SUMMARY = ROOT / "dist" / "cheats-summary.json"
 DIST_SAVES_INDEX = ROOT / "dist" / "saves-index.json"
+DIST_DELIVERY_DIR = ROOT / "dist" / "delivery"
 DIST_CHEATS_DIR = ROOT / "dist" / "cheats"
 DIST_SAVE_PACKS_DIR = ROOT / "dist" / "save-packs"
 DIST_CHEATS_PACK = ROOT / "dist" / "cheats-pack.zip"
@@ -23,6 +24,7 @@ SITE_INDEX_JSON = SITE_DIR / "index.json"
 SITE_CHEATS_INDEX_JSON = SITE_DIR / "cheats-index.json"
 SITE_CHEATS_SUMMARY_JSON = SITE_DIR / "cheats-summary.json"
 SITE_SAVES_INDEX_JSON = SITE_DIR / "saves-index.json"
+SITE_DELIVERY_DIR = SITE_DIR / "delivery"
 SITE_INDEX_HTML = SITE_DIR / "index.html"
 SITE_NOJEKYLL = SITE_DIR / ".nojekyll"
 SITE_CNAME = SITE_DIR / "CNAME"
@@ -42,6 +44,8 @@ def copy_tree_contents(source_dir: Path, target_dir: Path) -> None:
     for source_path in source_dir.rglob("*"):
         relative_path = source_path.relative_to(source_dir)
         target_path = target_dir / relative_path
+        if not source_path.exists():
+            continue
         if source_path.is_dir():
             target_path.mkdir(parents=True, exist_ok=True)
             continue
@@ -164,6 +168,8 @@ def main() -> int:
             shutil.copyfile(source_path, target_path)
     if DIST_THUMBS_DIR.exists():
         copy_tree_contents(DIST_THUMBS_DIR, SITE_THUMBS_DIR)
+    if DIST_DELIVERY_DIR.exists():
+        copy_tree_contents(DIST_DELIVERY_DIR, SITE_DELIVERY_DIR)
     if DIST_CHEATS_DIR.exists():
         copy_tree_contents(DIST_CHEATS_DIR, SITE_CHEATS_DIR)
     if DIST_SAVE_PACKS_DIR.exists():

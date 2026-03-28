@@ -23,6 +23,8 @@ METADATA_PATH = SOURCE_DIR / "catalog-metadata.json"
 CHEAT_SOURCES_PATH = SOURCE_DIR / "cheats-sources.json"
 DIST_DIR = ROOT / "dist"
 DIST_CHEATS_DIR = DIST_DIR / "cheats"
+DIST_DELIVERY_DIR = DIST_DIR / "delivery"
+DIST_DELIVERY_CHEATS_DIR = DIST_DELIVERY_DIR / "cheats"
 DIST_CHEATS_INDEX_PATH = DIST_DIR / "cheats-index.json"
 DIST_CHEATS_PACK_PATH = DIST_DIR / "cheats-pack.zip"
 DIST_CHEATS_MANIFEST_PATH = DIST_DIR / "cheats-manifest.json"
@@ -158,6 +160,16 @@ def normalize_public_base_url(source: dict) -> str:
     if not base_url.endswith("/"):
         base_url += "/"
     return base_url
+
+
+def make_logical_asset_id(asset_type: str, *parts: str) -> str:
+    payload = "::".join([asset_type, *[str(part).strip().lower() for part in parts if str(part).strip()]])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def make_delivery_relative_path(group: str, asset_id: str, extension: str) -> Path:
+    normalized_extension = extension.lstrip(".")
+    return Path("delivery") / group / asset_id[:2] / asset_id[2:4] / f"{asset_id}.{normalized_extension}"
 
 
 def normalize_cheat_text(text: str) -> str:
@@ -496,26 +508,16 @@ def merge_candidates(candidates: list[CheatCandidate]) -> list[MergedCheatEntry]
 
 
 def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, catalog_name_map: dict[str, str]) -> dict:
-    if DIST_CHEATS_DIR.exists():
-        for path in DIST_CHEATS_DIR.rglob("*"):
-            if path.is_file():
-                try:
-                    path.unlink()
-                except FileNotFoundError:
-                    pass
-        for path in sorted(DIST_CHEATS_DIR.rglob("*"), reverse=True):
-            if path.is_dir():
-                try:
-                    path.rmdir()
-                except OSError:
-                    pass
+    DIST_CHEATS_DIR.mkdir(parents=True, exist_ok=True)
+    DIST_DELIVERY_CHEATS_DIR.mkdir(parents=True, exist_ok=True)
 
     titles_map: dict[str, dict] = {}
     source_summary: dict[str, int] = {}
 
     for entry in entries:
         entry_id = f"{entry.title_id.lower()}-{entry.build_id.lower()}-{entry.content_hash[:12]}"
-        relative_path = Path("cheats") / entry.title_id / entry.build_id / f"{entry_id}.txt"
+        entry_asset_id = make_logical_asset_id("cheat-entry", entry.title_id, entry.build_id, entry.content_hash, entry_id)
+        relative_path = make_delivery_relative_path("cheats", entry_asset_id, "txt")
         output_path = DIST_DIR / relative_path
         output_path.parent.mkdir(parents=True, exist_ok=True)
         output_path.write_text(entry.content, encoding="utf-8")
@@ -553,6 +555,8 @@ def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, ca
             {
                 "id": entry_id,
                 "title": entry.title or choose_entry_title(entry.categories),
+                "assetId": entry_asset_id,
+                "assetType": "cheat-entry",
                 "primarySource": min(entry.sources, key=lambda item: item),
                 "sources": entry.sources,
                 "categories": entry.categories,
@@ -560,8 +564,6 @@ def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, ca
                 "cheatCount": count_cheat_blocks(entry.content),
                 "lineCount": len([line for line in entry.content.splitlines() if line.strip()]),
                 "relativePath": str(relative_path).replace("\\", "/"),
-                "downloadUrl": public_base_url + str(relative_path).replace("\\", "/"),
-                "originUrls": entry.origin_urls,
                 "priorityRank": entry.priority_rank,
             }
         )
@@ -578,13 +580,14 @@ def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, ca
             build_bucket = title_bucket["builds"][build_id]
             build_bucket["entries"].sort(key=lambda item: (item["priorityRank"], item["title"], item["id"]))
             combined_text = normalize_cheat_text("\n\n".join(build_bucket["contents"]))
-            build_relative_path = Path("cheats") / title_bucket["titleId"] / f"{build_id}.txt"
+            build_content_hash = hashlib.sha256(combined_text.encode("utf-8")).hexdigest()
+            build_asset_id = make_logical_asset_id("cheat-build", title_bucket["titleId"], build_id, build_content_hash)
+            build_relative_path = make_delivery_relative_path("cheats", build_asset_id, "txt")
             build_output_path = DIST_DIR / build_relative_path
             build_output_path.parent.mkdir(parents=True, exist_ok=True)
             build_output_path.write_text(combined_text, encoding="utf-8")
             build_cheat_count = count_cheat_blocks(combined_text)
             build_line_count = len([line for line in combined_text.splitlines() if line.strip()])
-            build_content_hash = hashlib.sha256(combined_text.encode("utf-8")).hexdigest()
             for item in build_bucket["entries"]:
                 title_categories.update(item["categories"])
                 title_sources.update(item["sources"])
@@ -592,6 +595,8 @@ def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, ca
             builds.append(
                 {
                     "buildId": build_id,
+                    "assetId": build_asset_id,
+                    "assetType": "cheat-build",
                     "categories": sorted(build_bucket["categories"]),
                     "primarySource": build_bucket["primarySource"],
                     "sources": sorted(build_bucket["sources"]),
@@ -599,7 +604,7 @@ def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, ca
                     "cheatCount": build_cheat_count,
                     "lineCount": build_line_count,
                     "relativePath": str(build_relative_path).replace("\\", "/"),
-                    "downloadUrl": public_base_url + str(build_relative_path).replace("\\", "/"),
+                    "size": build_output_path.stat().st_size,
                     "priorityRank": int(build_bucket["priorityRank"]),
                     "entries": build_bucket["entries"],
                 }
@@ -622,6 +627,8 @@ def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, ca
                 "builds": [
                     {
                         "buildId": build["buildId"],
+                        "assetId": build["assetId"],
+                        "assetType": build["assetType"],
                         "categories": build["categories"],
                         "primarySource": build["primarySource"],
                         "sources": build["sources"],
@@ -629,7 +636,7 @@ def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, ca
                         "cheatCount": build["cheatCount"],
                         "lineCount": build["lineCount"],
                         "relativePath": build["relativePath"],
-                        "downloadUrl": build["downloadUrl"],
+                        "size": build["size"],
                         "priorityRank": build["priorityRank"],
                     }
                     for build in builds
@@ -644,29 +651,45 @@ def write_dist_outputs(entries: list[MergedCheatEntry], public_base_url: str, ca
     }
 
 
-def build_pack_files(catalog_revision: str, public_base_url: str) -> tuple[str, str, str]:
+def build_pack_files(catalog_revision: str, public_base_url: str) -> tuple[str, str, str, str, int]:
     revision = str(catalog_revision or "").strip() or now_utc_iso().replace(":", "-")
+    pack_asset_id = make_logical_asset_id("cheat-pack", revision)
+    pack_relative_path = Path("delivery") / "packs" / "cheats" / pack_asset_id[:2] / f"{pack_asset_id}.zip"
+    pack_output_path = DIST_DIR / pack_relative_path
     manifest = {
         "schemaVersion": "1.0",
         "generatedAt": now_utc_iso(),
         "revision": revision,
-        "packFile": DIST_CHEATS_PACK_PATH.name,
+        "assetId": pack_asset_id,
+        "assetType": "cheat-pack",
+        "packFile": pack_relative_path.as_posix(),
     }
     DIST_CHEATS_MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
     DIST_CHEATS_PACK_PATH.parent.mkdir(parents=True, exist_ok=True)
+    pack_output_path.parent.mkdir(parents=True, exist_ok=True)
     with zipfile.ZipFile(DIST_CHEATS_PACK_PATH, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=9) as archive:
         archive.write(DIST_CHEATS_MANIFEST_PATH, "manifest.json")
-        if DIST_CHEATS_DIR.exists():
-            for path in sorted(DIST_CHEATS_DIR.rglob("*")):
+        if DIST_DELIVERY_CHEATS_DIR.exists():
+            for path in sorted(DIST_DELIVERY_CHEATS_DIR.rglob("*")):
                 if path.is_file():
                     archive.write(path, path.relative_to(DIST_DIR).as_posix())
 
+    pack_output_path.write_bytes(DIST_CHEATS_PACK_PATH.read_bytes())
+
     pack_sha256 = "sha256:" + sha256_file(DIST_CHEATS_PACK_PATH)
     manifest["packSha256"] = pack_sha256
+    manifest["relativePath"] = pack_relative_path.as_posix()
+    manifest["size"] = pack_output_path.stat().st_size
     DIST_CHEATS_MANIFEST_PATH.write_text(json.dumps(manifest, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
 
-    return revision, public_base_url_for_path(public_base_url, DIST_CHEATS_PACK_PATH.name), pack_sha256
+    return (
+        revision,
+        pack_asset_id,
+        pack_relative_path.as_posix(),
+        public_base_url_for_path(public_base_url, pack_relative_path.as_posix()),
+        pack_output_path.stat().st_size,
+    )
 
 
 def public_base_url_for_path(base_url: str, relative_path: str) -> str:
@@ -701,16 +724,24 @@ def main() -> int:
     merged_entries = merge_candidates(all_candidates)
     output = write_dist_outputs(merged_entries, public_base_url, catalog_name_map)
 
-    cheats_pack_revision, cheats_pack_url, cheats_pack_sha256 = build_pack_files(str(metadata.get("catalogRevision") or ""), public_base_url)
+    cheats_pack_revision, cheats_pack_asset_id, cheats_pack_relative_path, _cheats_pack_url, cheats_pack_size = build_pack_files(
+        str(metadata.get("catalogRevision") or ""),
+        public_base_url,
+    )
+    cheats_pack_sha256 = "sha256:" + sha256_file(DIST_CHEATS_PACK_PATH)
 
     cheats_summary_payload = {
         "schemaVersion": "1.0",
         "generatedAt": now_utc_iso(),
         "generator": "MILCheatsAggregator",
         "catalogRevision": str(metadata.get("catalogRevision") or ""),
+        "deliveryBaseUrl": public_base_url,
         "cheatsPackRevision": cheats_pack_revision,
-        "cheatsPackUrl": cheats_pack_url,
+        "cheatsPackAssetId": cheats_pack_asset_id,
+        "cheatsPackAssetType": "cheat-pack",
+        "cheatsPackRelativePath": cheats_pack_relative_path,
         "cheatsPackSha256": cheats_pack_sha256,
+        "cheatsPackSize": cheats_pack_size,
         "watchedTitleIds": sorted(watched_title_ids),
         "titles": output["summaries"],
     }
@@ -724,9 +755,13 @@ def main() -> int:
         "generatedAt": now_utc_iso(),
         "generator": "MILCheatsAggregator",
         "catalogRevision": str(metadata.get("catalogRevision") or ""),
+        "deliveryBaseUrl": public_base_url,
         "cheatsPackRevision": cheats_pack_revision,
-        "cheatsPackUrl": cheats_pack_url,
+        "cheatsPackAssetId": cheats_pack_asset_id,
+        "cheatsPackAssetType": "cheat-pack",
+        "cheatsPackRelativePath": cheats_pack_relative_path,
         "cheatsPackSha256": cheats_pack_sha256,
+        "cheatsPackSize": cheats_pack_size,
         "watchedTitleIds": sorted(watched_title_ids),
         "sources": {
             source_name: {

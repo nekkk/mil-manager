@@ -22,6 +22,8 @@ METADATA_PATH = SOURCE_DIR / "catalog-metadata.json"
 SAVES_SOURCES_PATH = SOURCE_DIR / "saves-sources.json"
 DIST_DIR = ROOT / "dist"
 DIST_SAVE_PACKS_DIR = DIST_DIR / "save-packs"
+DIST_DELIVERY_DIR = DIST_DIR / "delivery"
+DIST_DELIVERY_SAVES_DIR = DIST_DELIVERY_DIR / "saves"
 DIST_SAVES_INDEX_PATH = DIST_DIR / "saves-index.json"
 CACHE_DIR = ROOT / ".cache" / "saves"
 HTTP_CACHE_DIR = CACHE_DIR / "http"
@@ -177,6 +179,16 @@ def normalize_public_base_url(metadata: dict) -> str:
     if not base_url.endswith("/"):
         base_url += "/"
     return base_url
+
+
+def make_logical_asset_id(asset_type: str, *parts: str) -> str:
+    payload = "::".join([asset_type, *[str(part).strip().lower() for part in parts if str(part).strip()]])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def make_delivery_relative_path(group: str, asset_id: str, extension: str) -> Path:
+    normalized_extension = extension.lstrip(".")
+    return Path("delivery") / group / asset_id[:2] / asset_id[2:4] / f"{asset_id}.{normalized_extension}"
 
 
 def load_catalog_entries() -> tuple[dict, list[dict]]:
@@ -564,11 +576,13 @@ def public_base_url_for_path(base_url: str, relative_path: str) -> str:
 
 
 def build_pack_and_index(variants: list[MergedSaveVariant], public_base_url: str) -> dict:
-    if DIST_SAVE_PACKS_DIR.exists():
-        for path in DIST_SAVE_PACKS_DIR.rglob("*"):
+    for root_dir in (DIST_SAVE_PACKS_DIR, DIST_DELIVERY_SAVES_DIR):
+        if not root_dir.exists():
+            continue
+        for path in root_dir.rglob("*"):
             if path.is_file():
                 path.unlink()
-        for path in sorted(DIST_SAVE_PACKS_DIR.rglob("*"), reverse=True):
+        for path in sorted(root_dir.rglob("*"), reverse=True):
             if path.is_dir():
                 try:
                     path.rmdir()
@@ -592,7 +606,8 @@ def build_pack_and_index(variants: list[MergedSaveVariant], public_base_url: str
 
         variant_slug = slugify(variant.label)
         variant_id = f"{variant_slug}-{variant.payload_hash[:8]}"
-        relative_zip_path = Path("save-packs") / variant.title_id / f"{variant_id}.zip"
+        asset_id = make_logical_asset_id("save-pack", variant.title_id, variant_id, variant.payload_hash)
+        relative_zip_path = make_delivery_relative_path("saves", asset_id, "zip")
         output_zip_path = DIST_DIR / relative_zip_path
         output_zip_path.parent.mkdir(parents=True, exist_ok=True)
 
@@ -622,7 +637,10 @@ def build_pack_and_index(variants: list[MergedSaveVariant], public_base_url: str
                 "author": variant.author,
                 "language": variant.language,
                 "updatedAt": variant.updated_at,
-                "downloadUrl": public_base_url_for_path(public_base_url, relative_zip_path.as_posix()),
+                "assetId": asset_id,
+                "assetType": "save-pack",
+                "relativePath": relative_zip_path.as_posix(),
+                "contentHash": "sha256:" + hashlib.sha256(output_zip_path.read_bytes()).hexdigest(),
                 "sha256": "sha256:" + hashlib.sha256(output_zip_path.read_bytes()).hexdigest(),
                 "size": output_zip_path.stat().st_size,
                 "origins": sorted(variant.origins),
@@ -670,6 +688,7 @@ def main() -> int:
         "generatedAt": now_utc_iso(),
         "generator": "MILSaveGamesAggregator",
         "catalogRevision": str(metadata.get("catalogRevision") or ""),
+        "deliveryBaseUrl": public_base_url,
         "titles": built["titles"],
     }
 

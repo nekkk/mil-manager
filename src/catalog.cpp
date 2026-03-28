@@ -1,5 +1,6 @@
 #include "mil/catalog.hpp"
 
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 
@@ -25,6 +26,21 @@ std::string GetString(const picojson::object& object, const std::string& key) {
         return {};
     }
     return iterator->second.get<std::string>();
+}
+
+std::uint64_t GetUint64(const picojson::object& object, const std::string& key) {
+    const auto iterator = object.find(key);
+    if (iterator == object.end()) {
+        return 0;
+    }
+    if (iterator->second.is<double>()) {
+        const double value = iterator->second.get<double>();
+        return value > 0.0 ? static_cast<std::uint64_t>(value) : 0;
+    }
+    if (iterator->second.is<std::string>()) {
+        return static_cast<std::uint64_t>(std::strtoull(iterator->second.get<std::string>().c_str(), nullptr, 10));
+    }
+    return 0;
 }
 
 bool GetBool(const picojson::object& object, const std::string& key) {
@@ -60,7 +76,12 @@ CompatibilityRule ParseCompatibilityRule(const picojson::object& object) {
 bool ParseVariant(const picojson::object& object, CatalogVariant& variant) {
     variant.id = GetString(object, "id");
     variant.label = GetString(object, "label");
+    variant.assetId = GetString(object, "assetId");
+    variant.assetType = GetString(object, "assetType");
+    variant.contentHash = GetString(object, "contentHash");
+    variant.relativePath = GetString(object, "relativePath");
     variant.downloadUrl = GetString(object, "downloadUrl");
+    variant.size = GetUint64(object, "size");
     variant.packageVersion = GetString(object, "packageVersion");
     if (variant.packageVersion.empty()) {
         variant.packageVersion = GetString(object, "version");
@@ -72,7 +93,7 @@ bool ParseVariant(const picojson::object& object, CatalogVariant& variant) {
         variant.compatibility = ParseCompatibilityRule(compatibilityIt->second.get<picojson::object>());
     }
 
-    return !variant.id.empty() && !variant.downloadUrl.empty();
+    return !variant.id.empty() && (!variant.downloadUrl.empty() || !variant.relativePath.empty());
 }
 
 bool ParseEntry(const picojson::object& object, CatalogEntry& entry) {
@@ -105,7 +126,12 @@ bool ParseEntry(const picojson::object& object, CatalogEntry& entry) {
     entry.contentRevision = GetString(object, "contentRevision");
     entry.language = GetString(object, "language");
     entry.contentTypes = GetStringArray(object, "contentTypes");
+    entry.assetId = GetString(object, "assetId");
+    entry.assetType = GetString(object, "assetType");
+    entry.contentHash = GetString(object, "contentHash");
+    entry.relativePath = GetString(object, "relativePath");
     entry.downloadUrl = GetString(object, "downloadUrl");
+    entry.size = GetUint64(object, "size");
     entry.detailsUrl = GetString(object, "detailsUrl");
     entry.coverUrl = GetString(object, "coverUrl");
     if (entry.coverUrl.empty()) {
@@ -147,7 +173,7 @@ bool ParseEntry(const picojson::object& object, CatalogEntry& entry) {
         }
     }
 
-    const bool hasDirectInstallPayload = !entry.downloadUrl.empty() || !entry.variants.empty();
+    const bool hasDirectInstallPayload = !entry.downloadUrl.empty() || !entry.relativePath.empty() || !entry.variants.empty();
     const bool isCheatAggregate = entry.section == ContentSection::Cheats;
     return !entry.id.empty() && !entry.name.empty() && (hasDirectInstallPayload || isCheatAggregate);
 }
@@ -174,9 +200,14 @@ bool LoadCatalogFromJsonString(const std::string& json, CatalogIndex& catalog, s
     catalog.channel = GetString(object, "channel");
     catalog.schemaVersion = GetString(object, "schemaVersion");
     catalog.generatedAt = GetString(object, "generatedAt");
+    catalog.deliveryBaseUrl = GetString(object, "deliveryBaseUrl");
     catalog.thumbPackRevision = GetString(object, "thumbPackRevision");
+    catalog.thumbPackAssetId = GetString(object, "thumbPackAssetId");
+    catalog.thumbPackAssetType = GetString(object, "thumbPackAssetType");
+    catalog.thumbPackRelativePath = GetString(object, "thumbPackRelativePath");
     catalog.thumbPackUrl = GetString(object, "thumbPackUrl");
     catalog.thumbPackSha256 = GetString(object, "thumbPackSha256");
+    catalog.thumbPackSize = GetUint64(object, "thumbPackSize");
 
     const auto entriesIt = object.find("entries");
     if (entriesIt == object.end() || !entriesIt->second.is<picojson::array>()) {

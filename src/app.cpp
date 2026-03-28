@@ -504,6 +504,13 @@ const CheatTitleRecord* FindCheatTitleRecord(const CheatsIndex& index, const std
 const CheatBuildRecord* FindCheatBuildRecord(const CheatTitleRecord& title, const std::string& buildId);
 const SaveTitleRecord* FindSaveTitleRecord(const SavesIndex& index, const std::string& titleId);
 bool IsRyujinxGuestEnvironment();
+std::string ResolveThumbPackUrl(const CatalogIndex& catalog, const std::string& catalogSource);
+std::string ResolveCheatsPackUrl(const CheatsIndex& index, const std::string& cheatsIndexSource);
+std::string ResolveCatalogEntryDownloadUrl(const AppState& state, const CatalogEntry& entry);
+std::string ResolveCatalogVariantDownloadUrl(const AppState& state, const CatalogVariant& variant);
+std::string ResolveCheatBuildDownloadUrl(const AppState& state, const CheatBuildRecord& build);
+std::string ResolveCheatEntryDownloadUrl(const AppState& state, const CheatEntryRecord& entry);
+std::string ResolveSaveVariantDownloadUrl(const AppState& state, const SaveVariantRecord& variant);
 const std::vector<const CatalogEntry*>& BuildVisibleEntries(AppState& state);
 void RenderUi(PlatformSession& session, const AppState& state, const std::vector<const CatalogEntry*>& items);
 
@@ -1210,7 +1217,12 @@ void RefreshDerivedSaveEntries(AppState& state) {
             CatalogVariant variant;
             variant.id = variantRecord.id;
             variant.label = variantRecord.label;
+            variant.assetId = variantRecord.assetId;
+            variant.assetType = variantRecord.assetType;
+            variant.contentHash = !variantRecord.contentHash.empty() ? variantRecord.contentHash : variantRecord.sha256;
+            variant.relativePath = variantRecord.relativePath;
             variant.downloadUrl = variantRecord.downloadUrl;
+            variant.size = variantRecord.size;
             variant.contentRevision = variantRecord.updatedAt;
             entry.variants.push_back(std::move(variant));
         }
@@ -1417,10 +1429,12 @@ std::string ThumbPackPathForEntry(const CatalogIndex& catalog, const CatalogEntr
 }
 
 bool EnsureThumbPackCache(const CatalogIndex& catalog,
+                          const std::string& catalogSource,
                           std::string& error,
                           bool allowRemoteDownload = false,
                           UiDownloadProgressContext* progressContext = nullptr) {
-    if (catalog.thumbPackRevision.empty() || catalog.thumbPackUrl.empty()) {
+    const std::string packUrl = ResolveThumbPackUrl(catalog, catalogSource);
+    if (catalog.thumbPackRevision.empty() || packUrl.empty()) {
         return true;
     }
 
@@ -1452,7 +1466,7 @@ bool EnsureThumbPackCache(const CatalogIndex& catalog,
     options.allowResume = false;
 
     std::size_t downloadedBytes = 0;
-    if (!HttpDownloadToFileWithOptions(catalog.thumbPackUrl, kThumbPackZipPath, options, &downloadedBytes, error) ||
+    if (!HttpDownloadToFileWithOptions(packUrl, kThumbPackZipPath, options, &downloadedBytes, error) ||
         downloadedBytes == 0) {
         remove(kThumbPackZipPath);
         if (error.empty()) {
@@ -1507,10 +1521,12 @@ std::string CheatPackPathForEntry(const CheatsIndex& index, const CheatEntryReco
 }
 
 bool EnsureCheatPackCache(const CheatsIndex& index,
+                          const std::string& cheatsIndexSource,
                           std::string& error,
                           bool allowRemoteDownload = false,
                           UiDownloadProgressContext* progressContext = nullptr) {
-    if (index.cheatsPackRevision.empty() || index.cheatsPackUrl.empty()) {
+    const std::string packUrl = ResolveCheatsPackUrl(index, cheatsIndexSource);
+    if (index.cheatsPackRevision.empty() || packUrl.empty()) {
         return true;
     }
 
@@ -1546,7 +1562,7 @@ bool EnsureCheatPackCache(const CheatsIndex& index,
     options.progressUserData = progressContext;
 
     std::size_t downloadedBytes = 0;
-    if (!HttpDownloadToFileWithOptions(index.cheatsPackUrl, kCheatPackZipPath, options, &downloadedBytes, error) ||
+    if (!HttpDownloadToFileWithOptions(packUrl, kCheatPackZipPath, options, &downloadedBytes, error) ||
         downloadedBytes == 0) {
         remove(kCheatPackZipPath);
         if (error.empty()) {
@@ -2011,6 +2027,84 @@ std::string DeriveSavesIndexLocation(const std::string& catalogSource) {
     return {};
 }
 
+std::string BaseUrlForDocumentLocation(const std::string& source) {
+    if (source.rfind("http://", 0) != 0 && source.rfind("https://", 0) != 0) {
+        return {};
+    }
+    const std::size_t slash = source.find_last_of('/');
+    if (slash == std::string::npos) {
+        return {};
+    }
+    return source.substr(0, slash + 1);
+}
+
+std::string JoinBaseUrlAndRelativePath(const std::string& baseUrl, const std::string& relativePath) {
+    if (baseUrl.empty() || relativePath.empty()) {
+        return {};
+    }
+    if (relativePath.rfind("http://", 0) == 0 || relativePath.rfind("https://", 0) == 0) {
+        return relativePath;
+    }
+    if (baseUrl.back() == '/') {
+        return baseUrl + relativePath;
+    }
+    return baseUrl + "/" + relativePath;
+}
+
+std::string ResolveDeliveryUrl(const std::string& relativePath,
+                               const std::string& explicitUrl,
+                               const std::string& deliveryBaseUrl,
+                               const std::string& sourceDocument) {
+    if (!explicitUrl.empty()) {
+        return explicitUrl;
+    }
+    if (!relativePath.empty()) {
+        if (const std::string fromDeliveryBase = JoinBaseUrlAndRelativePath(deliveryBaseUrl, relativePath);
+            !fromDeliveryBase.empty()) {
+            return fromDeliveryBase;
+        }
+        if (const std::string fromSource = JoinBaseUrlAndRelativePath(BaseUrlForDocumentLocation(sourceDocument), relativePath);
+            !fromSource.empty()) {
+            return fromSource;
+        }
+    }
+    return {};
+}
+
+std::string ResolveThumbPackUrl(const CatalogIndex& catalog, const std::string& catalogSource) {
+    return ResolveDeliveryUrl(catalog.thumbPackRelativePath,
+                              catalog.thumbPackUrl,
+                              catalog.deliveryBaseUrl,
+                              catalogSource);
+}
+
+std::string ResolveCheatsPackUrl(const CheatsIndex& index, const std::string& cheatsIndexSource) {
+    return ResolveDeliveryUrl(index.cheatsPackRelativePath,
+                              index.cheatsPackUrl,
+                              index.deliveryBaseUrl,
+                              cheatsIndexSource);
+}
+
+std::string ResolveCatalogEntryDownloadUrl(const AppState& state, const CatalogEntry& entry) {
+    return ResolveDeliveryUrl(entry.relativePath, entry.downloadUrl, state.catalog.deliveryBaseUrl, state.activeCatalogSource);
+}
+
+std::string ResolveCatalogVariantDownloadUrl(const AppState& state, const CatalogVariant& variant) {
+    return ResolveDeliveryUrl(variant.relativePath, variant.downloadUrl, state.catalog.deliveryBaseUrl, state.activeCatalogSource);
+}
+
+std::string ResolveCheatBuildDownloadUrl(const AppState& state, const CheatBuildRecord& build) {
+    return ResolveDeliveryUrl(build.relativePath, build.downloadUrl, state.cheatsIndex.deliveryBaseUrl, state.activeCheatsSource);
+}
+
+std::string ResolveCheatEntryDownloadUrl(const AppState& state, const CheatEntryRecord& entry) {
+    return ResolveDeliveryUrl(entry.relativePath, entry.downloadUrl, state.cheatsIndex.deliveryBaseUrl, state.activeCheatsSource);
+}
+
+std::string ResolveSaveVariantDownloadUrl(const AppState& state, const SaveVariantRecord& variant) {
+    return ResolveDeliveryUrl(variant.relativePath, variant.downloadUrl, state.savesIndex.deliveryBaseUrl, state.activeSavesSource);
+}
+
 std::string DeriveThumbManifestLocation(const CatalogIndex& catalog) {
     if (!catalog.thumbPackUrl.empty()) {
         const std::string suffix = "thumbs-pack.zip";
@@ -2441,7 +2535,7 @@ bool LoadCatalog(AppState& state,
         }
         state.catalog = std::move(localCatalog);
         std::string thumbError;
-        EnsureThumbPackCache(state.catalog, thumbError, false);
+        EnsureThumbPackCache(state.catalog, state.activeCatalogSource, thumbError, false);
         ClearThumbnailFailures(state);
         state.activeCatalogSource = path;
         RefreshDerivedCheatEntries(state);
@@ -2507,6 +2601,7 @@ bool LoadCatalog(AppState& state,
             55,
             25};
         EnsureThumbPackCache(state.catalog,
+                             state.activeCatalogSource,
                              thumbError,
                              allowRemotePackDownload || !IsRyujinxGuestEnvironment(),
                              &thumbProgress);
@@ -2891,8 +2986,23 @@ CatalogEntry ResolveEntryForVariant(const CatalogEntry& entry, const CatalogVari
     if (variant == nullptr) {
         return resolved;
     }
+    if (!variant->assetId.empty()) {
+        resolved.assetId = variant->assetId;
+    }
+    if (!variant->assetType.empty()) {
+        resolved.assetType = variant->assetType;
+    }
+    if (!variant->contentHash.empty()) {
+        resolved.contentHash = variant->contentHash;
+    }
+    if (!variant->relativePath.empty()) {
+        resolved.relativePath = variant->relativePath;
+    }
     if (!variant->downloadUrl.empty()) {
         resolved.downloadUrl = variant->downloadUrl;
+    }
+    if (variant->size > 0) {
+        resolved.size = variant->size;
     }
     if (!variant->packageVersion.empty()) {
         resolved.packageVersion = variant->packageVersion;
@@ -3484,12 +3594,12 @@ std::string CheatBuildSelectionMessage(const AppState& state, const InstalledTit
 
 bool InstallResolvedEntry(AppState& state, const CatalogEntry& entry, const CatalogVariant* variant) {
     const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
-    const CatalogEntry resolvedEntry = ResolveEntryForVariant(entry, variant);
+    CatalogEntry resolvedEntry = ResolveEntryForVariant(entry, variant);
+    if (variant != nullptr && resolvedEntry.downloadUrl.empty()) {
+        resolvedEntry.downloadUrl = ResolveCatalogVariantDownloadUrl(state, *variant);
+    }
     if (resolvedEntry.downloadUrl.empty()) {
-        state.statusLine = UiText(state,
-                                  "Nenhum download disponível para esta entrada/variante.",
-                                  "No download is available for this entry/variant.");
-        return false;
+        resolvedEntry.downloadUrl = ResolveCatalogEntryDownloadUrl(state, resolvedEntry);
     }
 
     if (entry.section == ContentSection::SaveGames) {
@@ -3525,8 +3635,22 @@ bool InstallResolvedEntry(AppState& state, const CatalogEntry& entry, const Cata
 
         InstallReceipt newReceipt;
         std::string error;
+        SaveVariantRecord resolvedSaveVariant = *saveVariant;
+        if (resolvedSaveVariant.contentHash.empty()) {
+            resolvedSaveVariant.contentHash = resolvedSaveVariant.sha256;
+        }
+        if (resolvedSaveVariant.downloadUrl.empty()) {
+            resolvedSaveVariant.downloadUrl = ResolveSaveVariantDownloadUrl(state, resolvedSaveVariant);
+        }
+        if (resolvedSaveVariant.downloadUrl.empty()) {
+            state.statusLine = UiText(state,
+                                      "Nenhum download disponível para esta entrada/variante.",
+                                      "No download is available for this entry/variant.");
+            return false;
+        }
+
         if (InstallSaveData(entry,
-                            *saveVariant,
+                            resolvedSaveVariant,
                             installedTitle,
                             newReceipt,
                             error,
@@ -3548,6 +3672,13 @@ bool InstallResolvedEntry(AppState& state, const CatalogEntry& entry, const Cata
 
         state.statusLine = std::string(UseEnglish(state) ? "Save installation failed: " : "Falha na instalacao do save: ") + error;
         ClearProgress(state);
+        return false;
+    }
+
+    if (resolvedEntry.downloadUrl.empty()) {
+        state.statusLine = UiText(state,
+                                  "Nenhum download disponível para esta entrada/variante.",
+                                  "No download is available for this entry/variant.");
         return false;
     }
 
@@ -3629,9 +3760,9 @@ bool InstallCheatBuild(AppState& state, const CatalogEntry& entry, const CheatBu
         installed = InstallCheatTextFromFile(entry, build.buildId, localCheatPath, installedTitle, newReceipt, error);
     }
 
-    std::string downloadUrl = build.downloadUrl;
+    std::string downloadUrl = ResolveCheatBuildDownloadUrl(state, build);
     if (downloadUrl.empty() && cheatEntry != nullptr) {
-        downloadUrl = cheatEntry->downloadUrl;
+        downloadUrl = ResolveCheatEntryDownloadUrl(state, *cheatEntry);
     }
 
     if (!installed && !downloadUrl.empty()) {

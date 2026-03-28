@@ -43,7 +43,12 @@ struct CompatibilityRule {
 struct CatalogVariant {
     std::string id;
     std::string label;
+    std::string assetId;
+    std::string assetType;
+    std::string contentHash;
+    std::string relativePath;
     std::string downloadUrl;
+    std::uint64_t size = 0;
     std::string packageVersion;
     std::string contentRevision;
     CompatibilityRule compatibility;
@@ -64,7 +69,12 @@ struct CatalogEntry {
     std::string contentRevision;
     std::string language;
     std::vector<std::string> contentTypes;
+    std::string assetId;
+    std::string assetType;
+    std::string contentHash;
+    std::string relativePath;
     std::string downloadUrl;
+    std::uint64_t size = 0;
     std::string detailsUrl;
     std::string coverUrl;
     std::string iconUrl;
@@ -82,9 +92,14 @@ struct CatalogIndex {
     std::string channel;
     std::string schemaVersion;
     std::string generatedAt;
+    std::string deliveryBaseUrl;
     std::string thumbPackRevision;
+    std::string thumbPackAssetId;
+    std::string thumbPackAssetType;
+    std::string thumbPackRelativePath;
     std::string thumbPackUrl;
     std::string thumbPackSha256;
+    std::uint64_t thumbPackSize = 0;
     std::vector<CatalogEntry> entries;
 };
 
@@ -93,6 +108,8 @@ struct CheatEntryRecord {
     std::string title;
     std::string primarySource;
     std::vector<std::string> sources;
+    std::string assetId;
+    std::string assetType;
     std::vector<std::string> categories;
     std::string contentHash;
     int cheatCount = 0;
@@ -108,11 +125,14 @@ struct CheatBuildRecord {
     std::vector<std::string> categories;
     std::string primarySource;
     std::vector<std::string> sources;
+    std::string assetId;
+    std::string assetType;
     std::string contentHash;
     int cheatCount = 0;
     int lineCount = 0;
     std::string relativePath;
     std::string downloadUrl;
+    std::uint64_t size = 0;
     int priorityRank = 0;
     std::vector<CheatEntryRecord> entries;
 };
@@ -128,9 +148,14 @@ struct CheatsIndex {
     std::string generatedAt;
     std::string generator;
     std::string catalogRevision;
+    std::string deliveryBaseUrl;
     std::string cheatsPackRevision;
+    std::string cheatsPackAssetId;
+    std::string cheatsPackAssetType;
+    std::string cheatsPackRelativePath;
     std::string cheatsPackUrl;
     std::string cheatsPackSha256;
+    std::uint64_t cheatsPackSize = 0;
     std::vector<std::string> watchedTitleIds;
     std::vector<CheatTitleRecord> titles;
 };
@@ -145,7 +170,11 @@ struct SaveVariantRecord {
     std::string author;
     std::string language;
     std::string updatedAt;
+    std::string assetId;
+    std::string assetType;
+    std::string relativePath;
     std::string downloadUrl;
+    std::string contentHash;
     std::string sha256;
     std::uint64_t size = 0;
     std::vector<std::string> origins;
@@ -163,6 +192,7 @@ struct SavesIndex {
     std::string generatedAt;
     std::string generator;
     std::string catalogRevision;
+    std::string deliveryBaseUrl;
     std::vector<SaveTitleRecord> titles;
 };
 

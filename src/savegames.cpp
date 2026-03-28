@@ -67,11 +67,15 @@ bool ParseSaveVariant(const picojson::object& object, SaveVariantRecord& variant
     variant.author = GetString(object, "author");
     variant.language = GetString(object, "language");
     variant.updatedAt = GetString(object, "updatedAt");
+    variant.assetId = GetString(object, "assetId");
+    variant.assetType = GetString(object, "assetType");
+    variant.relativePath = GetString(object, "relativePath");
     variant.downloadUrl = GetString(object, "downloadUrl");
+    variant.contentHash = GetString(object, "contentHash");
     variant.sha256 = GetString(object, "sha256");
     variant.size = GetUint64(object, "size");
     variant.origins = GetStringArray(object, "origins");
-    return !variant.id.empty() && !variant.downloadUrl.empty();
+    return !variant.id.empty() && (!variant.downloadUrl.empty() || !variant.relativePath.empty());
 }
 
 bool ParseSaveTitle(const picojson::object& object, SaveTitleRecord& title) {
@@ -116,6 +120,7 @@ bool LoadSavesIndexFromJsonString(const std::string& json, SavesIndex& index, st
     index.generatedAt = GetString(object, "generatedAt");
     index.generator = GetString(object, "generator");
     index.catalogRevision = GetString(object, "catalogRevision");
+    index.deliveryBaseUrl = GetString(object, "deliveryBaseUrl");
 
     const auto titlesIt = object.find("titles");
     if (titlesIt == object.end() || !titlesIt->second.is<picojson::array>()) {

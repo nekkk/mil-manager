@@ -1,5 +1,6 @@
 #include "mil/cheats.hpp"
 
+#include <cstdlib>
 #include <fstream>
 #include <sstream>
 
@@ -41,6 +42,21 @@ int GetInt(const picojson::object& object, const std::string& key) {
     return 0;
 }
 
+std::uint64_t GetUint64(const picojson::object& object, const std::string& key) {
+    const auto iterator = object.find(key);
+    if (iterator == object.end()) {
+        return 0;
+    }
+    if (iterator->second.is<double>()) {
+        const double value = iterator->second.get<double>();
+        return value > 0.0 ? static_cast<std::uint64_t>(value) : 0;
+    }
+    if (iterator->second.is<std::string>()) {
+        return static_cast<std::uint64_t>(std::strtoull(iterator->second.get<std::string>().c_str(), nullptr, 10));
+    }
+    return 0;
+}
+
 std::vector<std::string> GetStringArray(const picojson::object& object, const std::string& key) {
     std::vector<std::string> result;
     const auto iterator = object.find(key);
@@ -60,6 +76,8 @@ bool ParseCheatEntry(const picojson::object& object, CheatEntryRecord& entry) {
     entry.title = GetString(object, "title");
     entry.primarySource = GetString(object, "primarySource");
     entry.sources = GetStringArray(object, "sources");
+    entry.assetId = GetString(object, "assetId");
+    entry.assetType = GetString(object, "assetType");
     entry.categories = GetStringArray(object, "categories");
     entry.contentHash = GetString(object, "contentHash");
     entry.cheatCount = GetInt(object, "cheatCount");
@@ -76,11 +94,14 @@ bool ParseCheatBuild(const picojson::object& object, CheatBuildRecord& build) {
     build.categories = GetStringArray(object, "categories");
     build.primarySource = GetString(object, "primarySource");
     build.sources = GetStringArray(object, "sources");
+    build.assetId = GetString(object, "assetId");
+    build.assetType = GetString(object, "assetType");
     build.contentHash = GetString(object, "contentHash");
     build.cheatCount = GetInt(object, "cheatCount");
     build.lineCount = GetInt(object, "lineCount");
     build.relativePath = GetString(object, "relativePath");
     build.downloadUrl = GetString(object, "downloadUrl");
+    build.size = GetUint64(object, "size");
     build.priorityRank = GetInt(object, "priorityRank");
     const auto entriesIt = object.find("entries");
     if (entriesIt != object.end() && entriesIt->second.is<picojson::array>()) {
@@ -137,9 +158,14 @@ bool LoadCheatsIndexFromJsonString(const std::string& json, CheatsIndex& index, 
     index.generatedAt = GetString(object, "generatedAt");
     index.generator = GetString(object, "generator");
     index.catalogRevision = GetString(object, "catalogRevision");
+    index.deliveryBaseUrl = GetString(object, "deliveryBaseUrl");
     index.cheatsPackRevision = GetString(object, "cheatsPackRevision");
+    index.cheatsPackAssetId = GetString(object, "cheatsPackAssetId");
+    index.cheatsPackAssetType = GetString(object, "cheatsPackAssetType");
+    index.cheatsPackRelativePath = GetString(object, "cheatsPackRelativePath");
     index.cheatsPackUrl = GetString(object, "cheatsPackUrl");
     index.cheatsPackSha256 = GetString(object, "cheatsPackSha256");
+    index.cheatsPackSize = GetUint64(object, "cheatsPackSize");
     index.watchedTitleIds = GetStringArray(object, "watchedTitleIds");
 
     const auto titlesIt = object.find("titles");

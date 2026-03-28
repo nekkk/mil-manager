@@ -1,4 +1,4 @@
-# Gerenciador M.I.L.
+# mil-manager
 
 Homebrew para Nintendo Switch focado em distribuir e instalar traducoes, dublagens, mods, cheats e saves a partir de um catalogo remoto.
 
@@ -91,6 +91,18 @@ Agregador de cheats:
 - fallback: `ibnux`
 - dedupe por `titleId + buildId + hash do conteudo`
 
+Arquitetura e roadmap de publicacao:
+
+- [implementation-plan.md](C:/Users/lordd/source/codex/mil-manager/docs/implementation-plan.md)
+- [delivery-architecture-v1.md](C:/Users/lordd/source/codex/mil-manager/docs/delivery-architecture-v1.md)
+- [repo-split-rollout.md](C:/Users/lordd/source/codex/mil-manager/docs/repo-split-rollout.md)
+
+Separacao de repositorios:
+
+- `mil-manager`: codigo-fonte publico do app
+- `mil-manager-catalog`: gestao privada do catalogo e painel administrativo
+- `mil-manager-delivery`: artefatos sanitizados publicados para consumo do app
+
 ## Painel admin
 
 Arquivos-base:
@@ -126,6 +138,22 @@ powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-catalog.ps1 -Com
 
 Esse helper copia ferramentas compartilhadas, regenera `dist/index.json` e `site/`, e opcionalmente faz `commit` e `push`.
 Tambem regenera `dist/cheats-index.json` e `site/cheats/`.
+
+## Publicacao para mil-manager-delivery
+
+Helper:
+
+- [sync-mil-manager-delivery.ps1](C:/Users/lordd/source/codex/mil-manager/tools/sync-mil-manager-delivery.ps1)
+
+Exemplos:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-delivery.ps1
+powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-delivery.ps1 -Commit
+powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-delivery.ps1 -Commit -Push
+```
+
+Esse helper copia apenas a saida sanitizada de `site/` para o checkout local de `mil-manager-delivery`.
 
 ## Emuladores
 

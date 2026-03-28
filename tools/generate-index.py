@@ -1,15 +1,18 @@
 #!/usr/bin/env python3
 import io
+import base64
 import hashlib
 import json
 import os
 import time
+import urllib.parse
 import urllib.request
 import zipfile
 from datetime import datetime, timezone
 from pathlib import Path
 
 from PIL import Image
+from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -27,14 +30,18 @@ DIST_PATHS = [
     ROOT / "dist" / "index.json",
 ]
 DIST_THUMBS_DIR = ROOT / "dist" / "thumbs"
+DIST_DELIVERY_DIR = ROOT / "dist" / "delivery"
+DIST_DELIVERY_PACKAGES_DIR = DIST_DELIVERY_DIR / "packages"
 DIST_THUMBS_PACK_PATH = ROOT / "dist" / "thumbs-pack.zip"
 DIST_THUMBS_MANIFEST_PATH = ROOT / "dist" / "thumbs-manifest.json"
 ARTWORK_MANIFEST_PATH = CACHE_DIR / "artwork-manifest.json"
+PACKAGE_CACHE_DIR = ROOT / ".cache" / "packages"
 DEFAULT_PUBLIC_BASE_URL = "https://nekkk.github.io/mil-manager-catalog/"
 THUMB_SIZE = 110
 
 REQUIRED_FIELDS = ("id", "section", "titleId")
 _TITLEDB_BY_LOCALE = {}
+MIRROR_WARNINGS: list[str] = []
 
 
 def load_source() -> dict:
@@ -170,6 +177,155 @@ def normalize_public_base_url(source: dict) -> str:
     return base_url
 
 
+def make_logical_asset_id(asset_type: str, *parts: str) -> str:
+    payload = "::".join([asset_type, *[str(part).strip().lower() for part in parts if str(part).strip()]])
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()[:32]
+
+
+def asset_type_for_section(section: str) -> str:
+    normalized = str(section or "").strip().lower()
+    if normalized == "translations":
+        return "translation-package"
+    if normalized == "mods":
+        return "mod-package"
+    if normalized == "cheats":
+        return "cheat-package"
+    if normalized in ("savegames", "saves"):
+        return "save-package"
+    return "package"
+
+
+def make_delivery_relative_path(group: str, asset_id: str, extension: str) -> Path:
+    normalized_extension = extension.lstrip(".")
+    return Path("delivery") / group / asset_id[:2] / asset_id[2:4] / f"{asset_id}.{normalized_extension}"
+
+
+def infer_asset_extension(url: str) -> str:
+    parsed = urllib.parse.urlparse(url)
+    extension = Path(parsed.path).suffix.lower()
+    return extension if extension else ".zip"
+
+
+def http_post_json(url: str, payload: object) -> object:
+    request = urllib.request.Request(
+        url,
+        data=json.dumps(payload).encode("utf-8"),
+        headers={
+            "User-Agent": "MILCatalogGenerator/1.0",
+            "Content-Type": "application/json",
+        },
+        method="POST",
+    )
+    with urllib.request.urlopen(request, timeout=90) as response:
+        return json.loads(response.read().decode("utf-8", "replace"))
+
+
+def is_mega_url(url: str) -> bool:
+    return "mega.nz/" in url or "mega.co.nz/" in url
+
+
+def extract_mega_id(url: str) -> str:
+    file_pos = url.find("/file/")
+    if file_pos != -1:
+        id_begin = file_pos + 6
+        separator = url.find("#", id_begin)
+        return url[id_begin:] if separator == -1 else url[id_begin:separator]
+    legacy_pos = url.find("#!")
+    if legacy_pos != -1:
+        id_begin = legacy_pos + 2
+        separator = url.find("!", id_begin)
+        return url[id_begin:] if separator == -1 else url[id_begin:separator]
+    return ""
+
+
+def extract_mega_node_key(url: str) -> str:
+    modern_pos = url.find("#")
+    if modern_pos != -1 and modern_pos + 1 < len(url):
+        return url[modern_pos + 1 :]
+    legacy_pos = url.rfind("!")
+    if legacy_pos != -1 and legacy_pos + 1 < len(url):
+        return url[legacy_pos + 1 :]
+    return ""
+
+
+def base64_url_decode(value: str) -> bytes:
+    normalized = value.replace("-", "+").replace("_", "/")
+    while len(normalized) % 4 != 0:
+        normalized += "="
+    return base64.b64decode(normalized)
+
+
+def decode_mega_node_key(encoded_key: str) -> tuple[bytes, bytes]:
+    decoded = base64_url_decode(encoded_key)
+    if len(decoded) != 32:
+        raise ValueError("Invalid MEGA key length")
+    key = bytes(decoded[index] ^ decoded[index + 16] for index in range(16))
+    iv = bytes(decoded[index + 16] if index < 8 else 0 for index in range(16))
+    return key, iv
+
+
+def resolve_mega_file(public_url: str) -> tuple[str, bytes, bytes]:
+    file_id = extract_mega_id(public_url)
+    encoded_key = extract_mega_node_key(public_url)
+    if not file_id or not encoded_key:
+        raise ValueError("Invalid MEGA file link")
+    key, iv = decode_mega_node_key(encoded_key)
+    response = http_post_json("https://g.api.mega.co.nz/cs", [{"a": "g", "g": 1, "p": file_id}])
+    if not isinstance(response, list) or not response or not isinstance(response[0], dict):
+        raise ValueError("Invalid MEGA response")
+    direct_url = str(response[0].get("g") or "").strip()
+    if not direct_url:
+        raise ValueError("MEGA did not return a direct download URL")
+    return direct_url, key, iv
+
+
+def decrypt_mega_payload(payload: bytes, key: bytes, iv: bytes) -> bytes:
+    cipher = Cipher(algorithms.AES(key), modes.CTR(iv))
+    decryptor = cipher.decryptor()
+    return decryptor.update(payload) + decryptor.finalize()
+
+
+def cached_source_path(url: str, extension: str) -> Path:
+    digest = hashlib.sha256(url.encode("utf-8")).hexdigest()
+    return PACKAGE_CACHE_DIR / f"{digest}{extension}"
+
+
+def download_asset_bytes(url: str) -> bytes:
+    extension = infer_asset_extension(url)
+    cache_path = cached_source_path(url, extension)
+    cache_path.parent.mkdir(parents=True, exist_ok=True)
+    if cache_path.exists():
+        return cache_path.read_bytes()
+
+    if is_mega_url(url):
+        direct_url, key, iv = resolve_mega_file(url)
+        request = urllib.request.Request(direct_url, headers={"User-Agent": "MILCatalogGenerator/1.0"})
+        with urllib.request.urlopen(request, timeout=180) as response:
+            encrypted_payload = response.read()
+        payload = decrypt_mega_payload(encrypted_payload, key, iv)
+    else:
+        request = urllib.request.Request(url, headers={"User-Agent": "MILCatalogGenerator/1.0"})
+        with urllib.request.urlopen(request, timeout=180) as response:
+            payload = response.read()
+
+    cache_path.write_bytes(payload)
+    return payload
+
+
+def mirror_delivery_asset(source_url: str, asset_type: str, asset_id: str) -> tuple[str, str, int]:
+    extension = infer_asset_extension(source_url)
+    relative_path = make_delivery_relative_path("packages", asset_id, extension)
+    output_path = ROOT / "dist" / relative_path
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    payload = download_asset_bytes(source_url)
+    output_path.write_bytes(payload)
+    return (
+        f"sha256:{hashlib.sha256(payload).hexdigest()}",
+        relative_path.as_posix(),
+        len(payload),
+    )
+
+
 def choose_artwork_urls(entry: dict) -> tuple[str, str]:
     thumbnail = str(entry.get("thumbnailUrl") or "").strip()
     icon = str(entry.get("iconUrl") or "").strip()
@@ -205,20 +361,52 @@ def normalize_compatibility(raw_compatibility, entry_id: str) -> dict:
     return normalized
 
 
-def normalize_variant(variant: dict, entry_id: str) -> dict:
+def normalize_variant(variant: dict, entry_id: str) -> dict | None:
     if not isinstance(variant, dict):
         raise ValueError(f"Entrada '{entry_id}' com variant invalida")
     normalized = {
         "id": str(variant.get("id") or "").strip(),
         "label": str(variant.get("label") or "").strip(),
+        "assetId": str(variant.get("assetId") or "").strip(),
+        "assetType": str(variant.get("assetType") or "").strip(),
+        "contentHash": str(variant.get("contentHash") or "").strip(),
+        "relativePath": str(variant.get("relativePath") or "").strip(),
         "downloadUrl": str(variant.get("downloadUrl") or "").strip(),
+        "size": int(variant.get("size") or 0),
         "packageVersion": str(variant.get("packageVersion") or variant.get("version") or "").strip(),
         "contentRevision": str(variant.get("contentRevision") or "").strip(),
         "compatibility": normalize_compatibility(variant.get("compatibility"), entry_id),
     }
-    if not normalized["id"] or not normalized["downloadUrl"]:
-        raise ValueError(f"Entrada '{entry_id}' com variant sem id ou downloadUrl")
+    if not normalized["id"] or (not normalized["downloadUrl"] and not normalized["relativePath"]):
+        raise ValueError(f"Entrada '{entry_id}' com variant sem id e payload")
+    if not normalized["assetType"]:
+        normalized["assetType"] = "package-variant"
+    if not normalized["assetId"]:
+        normalized["assetId"] = make_logical_asset_id(
+            normalized["assetType"],
+            entry_id,
+            normalized["id"],
+            normalized["packageVersion"] or normalized["contentRevision"] or normalized["downloadUrl"] or normalized["relativePath"],
+        )
+    if normalized["downloadUrl"] and not normalized["relativePath"]:
+        try:
+            content_hash, relative_path, size = mirror_delivery_asset(
+                normalized["downloadUrl"],
+                normalized["assetType"],
+                normalized["assetId"],
+            )
+            normalized["contentHash"] = normalized["contentHash"] or content_hash
+            normalized["relativePath"] = relative_path
+            normalized["size"] = int(normalized.get("size") or 0) or size
+        except Exception as exc:
+            MIRROR_WARNINGS.append(f"Variant {entry_id}/{normalized['id']}: {exc}")
+    if normalized["downloadUrl"] and not normalized["relativePath"]:
+        MIRROR_WARNINGS.append(
+            f"Variant {entry_id}/{normalized['id']} skipped from public catalog because it could not be mirrored to delivery/"
+        )
+        return None
     normalized = {key: value for key, value in normalized.items() if value not in ("", [], {})}
+    normalized.pop("downloadUrl", None)
     return normalized
 
 
@@ -353,13 +541,45 @@ def normalize_entry(entry: dict, defaults: dict, public_base_url: str, artwork_m
     variants = merged.get("variants") or []
     if not isinstance(variants, list):
         raise ValueError(f"Entrada '{merged['id']}' com variants invalido")
-    merged["variants"] = [normalize_variant(variant, merged["id"]) for variant in variants]
+    merged["variants"] = [variant for variant in (normalize_variant(variant, merged["id"]) for variant in variants) if variant]
 
+    merged["assetType"] = str(merged.get("assetType") or "").strip() or asset_type_for_section(merged.get("section"))
+    merged["assetId"] = str(merged.get("assetId") or "").strip() or make_logical_asset_id(
+        merged["assetType"],
+        merged["section"],
+        merged["id"],
+        merged["titleId"],
+    )
+    merged["contentHash"] = str(merged.get("contentHash") or "").strip()
+    merged["relativePath"] = str(merged.get("relativePath") or "").strip()
     merged["downloadUrl"] = str(merged.get("downloadUrl") or "").strip()
-    if not merged["downloadUrl"] and not merged["variants"]:
-        raise ValueError(f"Entrada '{merged['id']}' sem downloadUrl e sem variants")
-    if not merged["downloadUrl"]:
-        merged.pop("downloadUrl", None)
+    if not merged["downloadUrl"] and not merged["relativePath"] and not merged["variants"]:
+        raise ValueError(f"Entrada '{merged['id']}' sem downloadUrl/relativePath e sem variants")
+    if merged["downloadUrl"] and not merged["relativePath"]:
+        try:
+            content_hash, relative_path, size = mirror_delivery_asset(
+                merged["downloadUrl"],
+                merged["assetType"],
+                merged["assetId"],
+            )
+            merged["contentHash"] = merged["contentHash"] or content_hash
+            merged["relativePath"] = relative_path
+            merged["size"] = int(merged.get("size") or 0) or size
+        except Exception as exc:
+            MIRROR_WARNINGS.append(f"Entry {merged['id']}: {exc}")
+    if merged["downloadUrl"] and not merged.get("relativePath"):
+        MIRROR_WARNINGS.append(
+            f"Entry {merged['id']} skipped from public catalog because it could not be mirrored to delivery/"
+        )
+        return None
+    merged.pop("downloadUrl", None)
+    merged["size"] = int(merged.get("size") or 0)
+    if not merged["relativePath"]:
+        merged.pop("relativePath", None)
+    if not merged["contentHash"]:
+        merged.pop("contentHash", None)
+    if not merged["size"]:
+        merged.pop("size", None)
 
     return merged
 
@@ -369,7 +589,24 @@ def build_index() -> dict:
     defaults = source.get("defaults") or {}
     public_base_url = normalize_public_base_url(source)
     artwork_manifest = load_artwork_manifest()
-    entries = [normalize_entry(entry, defaults, public_base_url, artwork_manifest) for entry in source.get("entries", [])]
+    if DIST_DELIVERY_PACKAGES_DIR.exists():
+        for path in DIST_DELIVERY_PACKAGES_DIR.rglob("*"):
+            if path.is_file():
+                try:
+                    path.unlink()
+                except FileNotFoundError:
+                    pass
+        for path in sorted(DIST_DELIVERY_PACKAGES_DIR.rglob("*"), reverse=True):
+            if path.is_dir():
+                try:
+                    path.rmdir()
+                except OSError:
+                    pass
+    entries = [
+        entry
+        for entry in (normalize_entry(entry, defaults, public_base_url, artwork_manifest) for entry in source.get("entries", []))
+        if entry is not None
+    ]
     entries.sort(key=lambda item: (item.get("section", ""), item.get("name", "").lower()))
     save_artwork_manifest(artwork_manifest)
 
@@ -385,8 +622,11 @@ def build_index() -> dict:
         "schemaVersion": source.get("schemaVersion", "1.0"),
         "catalogRevision": catalog_revision,
         "generatedAt": generated_at,
+        "deliveryBaseUrl": public_base_url,
         "thumbPackRevision": catalog_revision,
-        "thumbPackUrl": f"{public_base_url}thumbs-pack.zip",
+        "thumbPackAssetId": make_logical_asset_id("thumb-pack", catalog_revision),
+        "thumbPackAssetType": "thumb-pack",
+        "thumbPackRelativePath": "thumbs-pack.zip",
         "entries": entries,
     }
 
@@ -415,7 +655,6 @@ def write_thumb_pack(index_data: dict) -> None:
     manifest = {
         "schemaVersion": 1,
         "revision": index_data.get("thumbPackRevision") or index_data.get("catalogRevision", ""),
-        "packUrl": index_data.get("thumbPackUrl", ""),
         "imageSize": THUMB_SIZE,
         "entries": {},
     }
@@ -430,6 +669,7 @@ def write_thumb_pack(index_data: dict) -> None:
 
     manifest["packSha256"] = "sha256:" + sha256_file(DIST_THUMBS_PACK_PATH)
     index_data["thumbPackSha256"] = manifest["packSha256"]
+    index_data["thumbPackSize"] = DIST_THUMBS_PACK_PATH.stat().st_size
     write_output(index_data)
 
     DIST_THUMBS_MANIFEST_PATH.write_text(
@@ -445,6 +685,10 @@ def main() -> int:
     print(f"Index gerado com {len(index_data['entries'])} entradas.")
     print(f"Revisao: {index_data['catalogRevision']}")
     print(f"Saida principal: {DIST_PATHS[0]}")
+    if MIRROR_WARNINGS:
+        print("Avisos de espelhamento:")
+        for warning in MIRROR_WARNINGS:
+            print(f"- {warning}")
     return 0
 
 
