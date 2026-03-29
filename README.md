@@ -43,6 +43,7 @@ Visao geral:
 Operacao:
 
 - [tools-and-operations.md](C:/Users/lordd/source/codex/mil-manager/docs/tools-and-operations.md)
+- [manual-curation.md](C:/Users/lordd/source/codex/mil-manager/docs/manual-curation.md)
 - [implementation-plan.md](C:/Users/lordd/source/codex/mil-manager/docs/implementation-plan.md)
 - [delivery-architecture-v1.md](C:/Users/lordd/source/codex/mil-manager/docs/delivery-architecture-v1.md)
 - [repo-split-rollout.md](C:/Users/lordd/source/codex/mil-manager/docs/repo-split-rollout.md)

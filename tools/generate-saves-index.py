@@ -20,6 +20,7 @@ SOURCE_DIR = ROOT / "catalog-source"
 ENTRIES_DIR = SOURCE_DIR / "entries"
 METADATA_PATH = SOURCE_DIR / "catalog-metadata.json"
 SAVES_SOURCES_PATH = SOURCE_DIR / "saves-sources.json"
+MANUAL_SAVES_DIR = SOURCE_DIR / "manual-saves"
 DIST_DIR = ROOT / "dist"
 DIST_SAVE_PACKS_DIR = DIST_DIR / "save-packs"
 DIST_DELIVERY_DIR = DIST_DIR / "delivery"
@@ -91,6 +92,7 @@ class SaveCandidate:
     source: str
     origin_url: str
     payload_files: list[SavePayloadFile] = field(default_factory=list)
+    priority_rank: int = 999
 
 
 @dataclass
@@ -105,6 +107,7 @@ class MergedSaveVariant:
     origins: list[str]
     payload_files: list[SavePayloadFile]
     payload_hash: str
+    priority_rank: int = 999
 
 
 def now_utc_iso() -> str:
@@ -236,6 +239,10 @@ def slugify(value: str) -> str:
     return value or "save"
 
 
+def normalize_manual_variant_id(value: str) -> str:
+    return slugify(value).replace("-", "_")
+
+
 def load_titledb_names(locale: str) -> dict[str, dict]:
     cached = _TITLEDB_BY_LOCALE.get(locale)
     if cached is not None:
@@ -285,6 +292,20 @@ def load_titledb_name_index() -> dict[str, list[tuple[str, str]]]:
 
     _TITLEDB_NAME_INDEX = mapping
     return mapping
+
+
+def normalize_category_token(value: object, default: str = "other") -> str:
+    token = slugify(str(value or "")).replace("_", "-")
+    return token or default
+
+
+def load_manual_save_sidecar(path: Path) -> dict:
+    if not path.exists():
+        return {}
+    try:
+        return json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid manual save metadata: {path}") from exc
 
 
 def resolve_title_id_by_name(name: str) -> tuple[str, str] | tuple[None, None]:
@@ -529,8 +550,88 @@ def iter_niemasd_candidates(source_config: dict, catalog_name_map: dict[str, str
                 source="niemasd",
                 origin_url=root.get("html_url") or root.get("url") or "",
                 payload_files=payload_files,
+                priority_rank=999,
             )
         )
+    return candidates
+
+
+def load_manual_variant_payload_files(variant_dir: Path) -> list[SavePayloadFile]:
+    payload_root = variant_dir / "payload"
+    base_dir = payload_root if payload_root.exists() else variant_dir
+    payload_files: list[SavePayloadFile] = []
+    for path in sorted(base_dir.rglob("*")):
+        if not path.is_file():
+            continue
+        relative_path = path.relative_to(base_dir).as_posix()
+        if relative_path in {"metadata.json", ".gitkeep"}:
+            continue
+        payload_files.append(SavePayloadFile(path=relative_path, data=path.read_bytes()))
+    return payload_files
+
+
+def iter_manual_save_candidates(catalog_name_map: dict[str, str]) -> list[SaveCandidate]:
+    if not MANUAL_SAVES_DIR.exists():
+        return []
+
+    candidates: list[SaveCandidate] = []
+    for title_dir in sorted(MANUAL_SAVES_DIR.iterdir()):
+        if not title_dir.is_dir():
+            continue
+        title_id = normalize_title_id(title_dir.name)
+        if not re.fullmatch(r"[0-9A-F]{16}", title_id):
+            continue
+
+        for zip_path in sorted(title_dir.glob("*.zip")):
+            metadata = load_manual_save_sidecar(zip_path.with_suffix(".json"))
+            payload_files = load_zip_payload_files(zip_path.as_uri())
+            if not payload_files:
+                continue
+            variant_id = normalize_manual_variant_id(zip_path.stem)
+            label = repair_mojibake(str(metadata.get("label") or variant_id).strip()) or variant_id
+            category = normalize_category_token(metadata.get("category") or save_category_from_label(label))
+            candidates.append(
+                SaveCandidate(
+                    title_id=title_id,
+                    name=resolve_title_name(title_id, catalog_name_map, fallback=str(metadata.get("name") or title_id)),
+                    label=label,
+                    category=category,
+                    author=repair_mojibake(str(metadata.get("author") or "Manual").strip()) or "Manual",
+                    language=str(metadata.get("language") or "").strip(),
+                    updated_at=str(metadata.get("updatedAt") or "").strip(),
+                    source="manual",
+                    origin_url=f"manual://saves/{title_id}/{variant_id}",
+                    payload_files=payload_files,
+                    priority_rank=0,
+                )
+            )
+
+        for variant_dir in sorted(title_dir.iterdir()):
+            if not variant_dir.is_dir():
+                continue
+            metadata = load_manual_save_sidecar(variant_dir / "metadata.json")
+            payload_files = load_manual_variant_payload_files(variant_dir)
+            if not payload_files:
+                continue
+            variant_id = normalize_manual_variant_id(variant_dir.name)
+            label = repair_mojibake(str(metadata.get("label") or variant_id).strip()) or variant_id
+            category = normalize_category_token(metadata.get("category") or save_category_from_label(label))
+            candidates.append(
+                SaveCandidate(
+                    title_id=title_id,
+                    name=resolve_title_name(title_id, catalog_name_map, fallback=str(metadata.get("name") or title_id)),
+                    label=label,
+                    category=category,
+                    author=repair_mojibake(str(metadata.get("author") or "Manual").strip()) or "Manual",
+                    language=str(metadata.get("language") or "").strip(),
+                    updated_at=str(metadata.get("updatedAt") or "").strip(),
+                    source="manual",
+                    origin_url=f"manual://saves/{title_id}/{variant_id}",
+                    payload_files=payload_files,
+                    priority_rank=0,
+                )
+            )
+
     return candidates
 
 
@@ -554,11 +655,20 @@ def merge_candidates(candidates: list[SaveCandidate]) -> list[MergedSaveVariant]
                 origins=[candidate.source],
                 payload_files=candidate.payload_files,
                 payload_hash=payload_hash,
+                priority_rank=candidate.priority_rank,
             )
             merged[key] = target
         else:
             target.origins = sorted(set(target.origins + [candidate.source]))
-            if len(candidate.label) > len(target.label):
+            if candidate.priority_rank < target.priority_rank:
+                target.name = candidate.name or target.name
+                target.label = candidate.label or target.label
+                target.category = candidate.category or target.category
+                target.author = candidate.author or target.author
+                target.language = candidate.language or target.language
+                target.updated_at = candidate.updated_at or target.updated_at
+                target.priority_rank = candidate.priority_rank
+            elif len(candidate.label) > len(target.label):
                 target.label = candidate.label
             if not target.author and candidate.author:
                 target.author = candidate.author
@@ -672,6 +782,7 @@ def main() -> int:
     sources = config.get("sources") or {}
 
     all_candidates: list[SaveCandidate] = []
+    all_candidates.extend(iter_manual_save_candidates(catalog_name_map))
     if isinstance(sources.get("viren070"), dict) and sources["viren070"].get("enabled", False):
         all_candidates.extend(iter_viren_candidates(sources["viren070"], catalog_name_map))
     if isinstance(sources.get("ghostlydark"), dict) and sources["ghostlydark"].get("enabled", False):

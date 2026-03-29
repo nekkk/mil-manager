@@ -21,6 +21,7 @@ SOURCE_DIR = ROOT / "catalog-source"
 ENTRIES_DIR = SOURCE_DIR / "entries"
 METADATA_PATH = SOURCE_DIR / "catalog-metadata.json"
 CHEAT_SOURCES_PATH = SOURCE_DIR / "cheats-sources.json"
+MANUAL_CHEATS_DIR = SOURCE_DIR / "manual-cheats"
 DIST_DIR = ROOT / "dist"
 DIST_CHEATS_DIR = DIST_DIR / "cheats"
 DIST_DELIVERY_DIR = DIST_DIR / "delivery"
@@ -179,6 +180,22 @@ def normalize_cheat_text(text: str) -> str:
     return normalized + "\n" if normalized else ""
 
 
+def normalize_categories(value: object, default: list[str] | None = None) -> list[str]:
+    if isinstance(value, str):
+        values = [value]
+    elif isinstance(value, list):
+        values = value
+    else:
+        values = default or []
+
+    normalized: list[str] = []
+    for item in values:
+        token = re.sub(r"[^a-z0-9]+", "-", str(item or "").strip().lower()).strip("-")
+        if token and token not in normalized:
+            normalized.append(token)
+    return normalized
+
+
 def sha256_file(path: Path) -> str:
     digest = hashlib.sha256()
     with path.open("rb") as handle:
@@ -205,6 +222,16 @@ def choose_entry_title(categories: list[str]) -> str:
     if "community" in normalized:
         return "Community"
     return "General"
+
+
+def load_manual_cheat_metadata(txt_path: Path) -> dict:
+    metadata_path = txt_path.with_suffix(".json")
+    if not metadata_path.exists():
+        return {}
+    try:
+        return json.loads(metadata_path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise RuntimeError(f"Invalid manual cheat metadata: {metadata_path}") from exc
 
 
 def infer_categories(source_name: str, title_hint: str, content: str) -> list[str]:
@@ -478,6 +505,41 @@ def iter_cheatslips_candidates(source_config: dict, watched_title_ids: set[str],
     return candidates
 
 
+def iter_manual_cheat_candidates() -> list[CheatCandidate]:
+    if not MANUAL_CHEATS_DIR.exists():
+        return []
+
+    candidates: list[CheatCandidate] = []
+    for txt_path in sorted(MANUAL_CHEATS_DIR.glob("*/*.txt")):
+        title_id = normalize_title_id(txt_path.parent.name)
+        build_id = normalize_title_id(txt_path.stem)
+        if not re.fullmatch(r"[0-9A-F]{16}", title_id) or not re.fullmatch(r"[0-9A-F]{16}", build_id):
+            continue
+
+        content = normalize_cheat_text(txt_path.read_text(encoding="utf-8"))
+        if not content.strip():
+            continue
+
+        metadata = load_manual_cheat_metadata(txt_path)
+        title = str(metadata.get("title") or "").strip()
+        categories = normalize_categories(metadata.get("categories"), default=["manual"])
+
+        candidates.append(
+            CheatCandidate(
+                title_id=title_id,
+                build_id=build_id,
+                source="manual",
+                content=content,
+                categories=categories or ["manual"],
+                origin_url=f"manual://cheats/{title_id}/{build_id}",
+                title=title,
+                priority_rank=0,
+            )
+        )
+
+    return candidates
+
+
 def merge_candidates(candidates: list[CheatCandidate]) -> list[MergedCheatEntry]:
     merged: dict[tuple[str, str, str], MergedCheatEntry] = {}
     for candidate in candidates:
@@ -709,6 +771,11 @@ def main() -> int:
 
     all_candidates: list[CheatCandidate] = []
     enabled_sources: dict[str, dict] = {}
+
+    manual_candidates = iter_manual_cheat_candidates()
+    if manual_candidates:
+        all_candidates.extend(manual_candidates)
+        enabled_sources["manual"] = {"enabled": True}
 
     for source_name, source_config in sources.items():
         if not isinstance(source_config, dict) or not source_config.get("enabled", False):
