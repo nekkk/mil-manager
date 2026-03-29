@@ -691,7 +691,7 @@ std::vector<InstalledTitle> LoadInstalledTitlesFull(std::string& note) {
     } while (entryCount > 0);
 
     nsExit();
-    note = "Títulos instalados carregados por scan completo.";
+    note = u8"Títulos instalados carregados por varredura completa.";
     return titles;
 }
 

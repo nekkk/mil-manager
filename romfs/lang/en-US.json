@@ -196,7 +196,7 @@
       "5c9370d5": "installed-titles-cache.json does not contain a titles array."
     },
     "installed_titles_loaded_using_full_scan": {
-      "69e538d5": "Installed titles loaded using full search."
+      "69e538d5": "Installed titles loaded using full scan."
     },
     "installing_cheat": {
       "7a474d34": "Installing cheat"
@@ -541,6 +541,7 @@
     },
     "status": {
       "catalog_and_title_search_updated": "Catalog and title search updated.",
+      "cheat_installed_for_build_prefix": "Cheat installed for build: ",
       "games_prefix": "Games ",
       "language_saved": "Language saved to settings.ini",
       "packages_prefix": "Packages ",

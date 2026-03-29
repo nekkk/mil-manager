@@ -3826,7 +3826,10 @@ bool InstallCheatBuild(AppState& state, const CatalogEntry& entry, const CheatBu
                     UiText(state, u8"Instalando trapaça", "Installing cheat"),
                     build.buildId,
                     100);
-        state.statusLine = std::string(UseEnglish(state) ? "Cheat installed for build: " : "Cheat instalado para o build: ") +
+        state.statusLine = UiString(state,
+                                    "ui.status.cheat_installed_for_build_prefix",
+                                    "",
+                                    "") +
                            build.buildId;
         std::string note;
         state.receipts = LoadInstallReceipts(note);
@@ -4219,13 +4222,14 @@ std::string LocalizePlatformNote(const AppState& state, const std::string& note)
     if (note == "nsListApplicationRecord falhou no modo full.") {
         return UiText(state, u8"nsListApplicationRecord falhou no modo full.", "nsListApplicationRecord failed in full mode.");
     }
-    if (note == "Títulos instalados carregados por scan completo." ||
+    if (note == u8"Títulos instalados carregados por varredura completa." ||
+        note == "Títulos instalados carregados por scan completo." ||
         note == "Títulos instalados carregados por busca completa." ||
         note == "TÃ­tulos instalados carregados por scan completo.") {
         return UiString(state,
                         "installed_titles_loaded_using_full_scan",
-                        u8"Títulos instalados carregados por busca completa.",
-                        "Installed titles loaded using full search.");
+                        "",
+                        "");
     }
     if (note == "Catálogo sem title IDs para sondagem local.") {
         return UiText(state, u8"Cat?logo sem title IDs para sondagem local.", "Catalog has no title IDs for local probing.");

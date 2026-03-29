@@ -196,7 +196,7 @@
       "5c9370d5": "Arquivo installed-titles-cache.json sem array titles."
     },
     "installed_titles_loaded_using_full_scan": {
-      "69e538d5": "T\u00edtulos instalados carregados por busca completa."
+      "69e538d5": "T\u00edtulos instalados carregados por varredura completa."
     },
     "installing_cheat": {
       "7a474d34": "Instalando trapa\u00e7a"
@@ -541,6 +541,7 @@
     },
     "status": {
       "catalog_and_title_search_updated": "Cat\u00e1logo e busca de t\u00edtulos atualizados.",
+      "cheat_installed_for_build_prefix": "Trapa\u00e7a instalada para a build: ",
       "games_prefix": "Jogos ",
       "language_saved": "Idioma salvo em settings.ini",
       "packages_prefix": "Pacotes ",
