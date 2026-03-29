@@ -67,18 +67,6 @@ Launcher com sincronizacao:
 powershell -ExecutionPolicy Bypass -File tools\start-emulator-with-sync.ps1
 ```
 
-## O que as tools nao devem expor
-
-- tokens GitHub em arquivo commitado
-- PATs em scripts
-- URLs privadas embutidas em JSON publico
-
-## Sobre credenciais
-
-- o `mil-manager` publico nao deve armazenar segredos
-- o painel admin recebe token em tempo de execucao no navegador
-- GitHub Actions deve usar `Secrets`
-
 ## Nomes e objetivos atuais
 
 - `sync-emulator.ps1`
@@ -87,7 +75,3 @@ powershell -ExecutionPolicy Bypass -File tools\start-emulator-with-sync.ps1
   - sincroniza e depois abre o executavel do emulador
 - `mil_emulator_sync.py`
   - gera `installed-titles-cache.json` e aplica operacoes de save pendentes
-
-## Observacao sobre emuladores
-
-Internamente ainda existem adaptadores diferentes por layout suportado, mas a interface de operacao cotidiana foi simplificada para o termo generico `emulador`.
