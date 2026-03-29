@@ -1,200 +1,94 @@
 # mil-manager
 
-Homebrew para Nintendo Switch focado em distribuir e instalar traducoes, dublagens, mods, cheats e saves a partir de um catalogo remoto.
+Aplicativo homebrew para Nintendo Switch focado em listar, baixar e instalar:
 
-## Build
+- traducoes e dublagens
+- modificacoes
+- trapacas
+- jogos salvos
+
+O app consome catalogos sanitizados publicados em `mil-manager-delivery` e usa `mil-manager-catalog` apenas como origem de gerenciamento e geracao.
+
+## Inicio Rapido
+
+Build local:
 
 ```powershell
 cmake -S . -B build-switch2 -G "Unix Makefiles" -DCMAKE_TOOLCHAIN_FILE=C:/devkitPro/cmake/Switch.cmake -DDEVKITPRO=C:/devkitPro
-cmake --build build-switch2
+cmake --build build-switch2 --config Release
 ```
 
-Saida principal:
+Artefato principal:
 
 - [mil_manager.nro](C:/Users/lordd/source/codex/mil-manager/build-switch2/mil_manager.nro)
 
-## Estrutura local
+Catalogo default atual:
 
-Arquivos principais na SD:
+- [https://nekkk.github.io/mil-manager-delivery/index.json](https://nekkk.github.io/mil-manager-delivery/index.json)
 
-- `sdmc:/switch/mil_manager/index.json`
-- `sdmc:/switch/mil_manager/installed-titles-cache.json`
+## Documentacao
 
-Configuracao e cache:
+Visao geral:
 
-- `sdmc:/config/mil_manager/settings.ini`
-- `sdmc:/config/mil_manager/cache/index.json`
-- `sdmc:/config/mil_manager/cache/images/`
-- `sdmc:/config/mil_manager/cache/installed-icons/`
-- `sdmc:/config/mil_manager/receipts/`
+- [features.md](C:/Users/lordd/source/codex/mil-manager/docs/features.md)
+- [build-and-release.md](C:/Users/lordd/source/codex/mil-manager/docs/build-and-release.md)
+- [app-structure.md](C:/Users/lordd/source/codex/mil-manager/docs/app-structure.md)
+- [technical-stack.md](C:/Users/lordd/source/codex/mil-manager/docs/technical-stack.md)
+- [credits-and-references.md](C:/Users/lordd/source/codex/mil-manager/docs/credits-and-references.md)
 
-Compatibilidade legada:
+Operacao:
 
-- o app ainda aceita leitura de caminhos antigos em `sdmc:/config/mil-manager/`
-- novas gravacoes passam a usar `mil_manager`
-
-## settings.ini
-
-Exemplo:
-
-```ini
-language=pt-BR
-scan_mode=auto
-catalog_url=https://nekkk.github.io/mil-manager-catalog/index.json
-```
-
-Idiomas validos:
-
-- `pt-BR`
-- `en-US`
-
-Valores de `scan_mode`:
-
-- `auto`
-- `full`
-- `catalog`
-- `off`
-
-## Catalogo
-
-Fonte do catalogo:
-
-- [catalog-metadata.json](C:/Users/lordd/source/codex/mil-manager/catalog-source/catalog-metadata.json)
-- [entries](C:/Users/lordd/source/codex/mil-manager/catalog-source/entries)
-- [cheats-sources.json](C:/Users/lordd/source/codex/mil-manager/catalog-source/cheats-sources.json)
-
-Cada item vive em seu proprio arquivo em `catalog-source/entries/`.
-
-Gerar indice, cheats e site:
-
-```powershell
-python tools\generate-index.py
-python tools\generate-cheats-index.py
-python tools\prepare-pages-site.py
-```
-
-Saidas:
-
-- [dist/index.json](C:/Users/lordd/source/codex/mil-manager/dist/index.json)
-- [dist/cheats-index.json](C:/Users/lordd/source/codex/mil-manager/dist/cheats-index.json)
-- [dist/cheats](C:/Users/lordd/source/codex/mil-manager/dist/cheats)
-- [site/index.json](C:/Users/lordd/source/codex/mil-manager/site/index.json)
-- [site/cheats-index.json](C:/Users/lordd/source/codex/mil-manager/site/cheats-index.json)
-- [site/cheats](C:/Users/lordd/source/codex/mil-manager/site/cheats)
-
-O gerador tambem enriquece o indice com `intro`, `thumbnailUrl`, `iconUrl`, `coverUrl` e publica thumbs otimizados em `site/thumbs/`.
-
-Agregador de cheats:
-
-- schema e dedupe: [cheats-index-v1.md](C:/Users/lordd/source/codex/mil-manager/docs/cheats-index-v1.md)
-- fontes primarias: `Cheat Slips`, `gbatemp mirror`, `titledb`, `Chansey`
-- fallback: `ibnux`
-- dedupe por `titleId + buildId + hash do conteudo`
-
-Arquitetura e roadmap de publicacao:
-
+- [tools-and-operations.md](C:/Users/lordd/source/codex/mil-manager/docs/tools-and-operations.md)
 - [implementation-plan.md](C:/Users/lordd/source/codex/mil-manager/docs/implementation-plan.md)
 - [delivery-architecture-v1.md](C:/Users/lordd/source/codex/mil-manager/docs/delivery-architecture-v1.md)
 - [repo-split-rollout.md](C:/Users/lordd/source/codex/mil-manager/docs/repo-split-rollout.md)
 
-Separacao de repositorios:
+Schemas e notas especificas:
 
-- `mil-manager`: codigo-fonte publico do app
-- `mil-manager-catalog`: gestao privada do catalogo e painel administrativo
+- [cheats-index-v1.md](C:/Users/lordd/source/codex/mil-manager/docs/cheats-index-v1.md)
+- [savegames-aggregation-v1.md](C:/Users/lordd/source/codex/mil-manager/docs/savegames-aggregation-v1.md)
+- [emulator-manifest-v2.md](C:/Users/lordd/source/codex/mil-manager/docs/emulator-manifest-v2.md)
+
+## Repositorios
+
+- `mil-manager`: codigo-fonte publico do app, releases e documentacao
+- `mil-manager-catalog`: repositorio de gerenciamento do catalogo e do painel admin
 - `mil-manager-delivery`: artefatos sanitizados publicados para consumo do app
 
-## Painel admin
+## Estrutura Local Importante
 
-Arquivos-base:
+Na SD:
 
-- [site-src/admin/index.html](C:/Users/lordd/source/codex/mil-manager/site-src/admin/index.html)
-- [site-src/admin/app.js](C:/Users/lordd/source/codex/mil-manager/site-src/admin/app.js)
+- `sdmc:/switch/mil_manager/`
+- `sdmc:/switch/mil_manager/cache/`
+- `sdmc:/switch/mil_manager/receipts/`
 
-Fluxo:
+Configuracao:
 
-1. abrir `/admin/`
-2. informar `owner`, repositorio, `branch` e token GitHub
-3. carregar o catalogo
-4. editar e publicar
+- `sdmc:/config/mil_manager/settings.ini`
 
-O painel escreve em:
+Compatibilidade legada:
 
-- `catalog-source/catalog-metadata.json`
-- `catalog-source/entries/*.json`
-
-## Sincronizacao com mil-manager-catalog
-
-Helper:
-
-- [sync-mil-manager-catalog.ps1](C:/Users/lordd/source/codex/mil-manager/tools/sync-mil-manager-catalog.ps1)
-
-Exemplos:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-catalog.ps1
-powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-catalog.ps1 -Commit
-powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-catalog.ps1 -Commit -Push
-```
-
-Esse helper copia ferramentas compartilhadas, regenera `dist/index.json` e `site/`, e opcionalmente faz `commit` e `push`.
-Tambem regenera `dist/cheats-index.json` e `site/cheats/`.
-
-## Publicacao para mil-manager-delivery
-
-Helper:
-
-- [sync-mil-manager-delivery.ps1](C:/Users/lordd/source/codex/mil-manager/tools/sync-mil-manager-delivery.ps1)
-
-Exemplos:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-delivery.ps1
-powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-delivery.ps1 -Commit
-powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-delivery.ps1 -Commit -Push
-```
-
-Esse helper copia apenas a saida sanitizada de `site/` para o checkout local de `mil-manager-delivery`.
+- o app ainda tolera leitura de caminhos antigos em `sdmc:/config/mil-manager/`
+- novas gravacoes usam `mil_manager`
 
 ## Emuladores
 
-O homebrew rodando dentro do emulador nao enxerga automaticamente a biblioteca do host. O fluxo recomendado e sincronizar antes de abrir o app.
-
-Utilitario base:
+O homebrew nao enxerga sozinho a biblioteca do host. O fluxo suportado e sincronizar o catalogo e a biblioteca antes de abrir o app:
 
 ```powershell
 python tools\mil_emulator_sync.py --emulator auto
-```
-
-Sync do emulador:
-
-```powershell
 powershell -ExecutionPolicy Bypass -File tools\sync-emulator.ps1
-```
-
-Com URL explicita:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\sync-emulator.ps1 -CatalogUrl https://nekkk.github.io/mil-manager-delivery/index.json
-```
-
-Launcher com sync:
-
-```powershell
 powershell -ExecutionPolicy Bypass -File tools\start-emulator-with-sync.ps1
 ```
 
-Arquivos gerados na SD virtual:
+Detalhes e cuidados operacionais:
 
-- `sdmc:/switch/mil_manager/index.json`
-- `sdmc:/switch/mil_manager/installed-titles-cache.json`
-- `sdmc:/config/mil_manager/cache/images/`
+- [tools-and-operations.md](C:/Users/lordd/source/codex/mil-manager/docs/tools-and-operations.md)
 
-## Compatibilidade
+## Seguranca Operacional
 
-Campos suportados no catalogo:
-
-- `minGameVersion`
-- `maxGameVersion`
-- `exactGameVersions`
-
-Durante a instalacao, o app grava recibos locais para remocao limpa e auditoria futura.
+- o repositorio publico do app nao deve conter tokens, PATs ou URLs privadas
+- o delivery publico publica apenas artefatos sanitizados
+- as tools locais de sincronizacao trabalham com caminhos do usuario, nao com segredos embutidos
+- o painel admin usa token informado pelo operador e esse token nao deve ser commitado em arquivo algum
