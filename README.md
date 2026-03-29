@@ -162,25 +162,25 @@ O homebrew rodando dentro do emulador nao enxerga automaticamente a biblioteca d
 Utilitario base:
 
 ```powershell
-python tools\mil_emulator_sync.py --emulator ryujinx
+python tools\mil_emulator_sync.py --emulator auto
 ```
 
-Sync do Ryujinx:
+Sync do emulador:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\sync-ryujinx.ps1
+powershell -ExecutionPolicy Bypass -File tools\sync-emulator.ps1
 ```
 
 Com URL explicita:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\sync-ryujinx.ps1 -CatalogUrl https://nekkk.github.io/mil-manager-catalog/index.json
+powershell -ExecutionPolicy Bypass -File tools\sync-emulator.ps1 -CatalogUrl https://nekkk.github.io/mil-manager-delivery/index.json
 ```
 
 Launcher com sync:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File tools\start-ryujinx-with-sync.ps1
+powershell -ExecutionPolicy Bypass -File tools\start-emulator-with-sync.ps1
 ```
 
 Arquivos gerados na SD virtual:

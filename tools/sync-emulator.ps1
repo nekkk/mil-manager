@@ -1,11 +1,37 @@
 param(
     [string]$CatalogUrl = "https://SEU_USUARIO.github.io/SEU_REPOSITORIO/index.json",
     [string]$MegaFolderUrl = "",
-    [string]$RyujinxRoot = "$env:APPDATA\Ryujinx"
+    [string]$EmulatorRoot = ""
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+function Resolve-DefaultEmulatorRoot {
+    $candidates = @(
+        (Join-Path $env:APPDATA "Ryujinx"),
+        (Join-Path $env:APPDATA "eden")
+    )
+
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path $candidate)) {
+            return (Resolve-Path $candidate).Path
+        }
+    }
+
+    throw "Nao foi possivel localizar a raiz padrao do emulador. Informe -EmulatorRoot explicitamente."
+}
+
+function Get-EmulatorSdRoot {
+    param([Parameter(Mandatory = $true)][string]$EmulatorRootPath)
+
+    $sdmcPath = Join-Path $EmulatorRootPath "sdmc"
+    if (Test-Path $sdmcPath) {
+        return $sdmcPath
+    }
+
+    return (Join-Path $EmulatorRootPath "sdcard")
+}
 
 function Convert-Base64UrlToBytes {
     param([Parameter(Mandatory = $true)][string]$Value)
@@ -622,7 +648,7 @@ function Save-CatalogThumbnailsNormalized {
     Write-Host "Thumbs do catálogo: baixados=$downloaded ignorados=$skipped falhas=$failed"
 }
 
-function Get-RyujinxGameVersion {
+function Get-EmulatorGameVersion {
     param([Parameter(Mandatory = $true)][string]$TitleDir)
 
     $cpuCacheDir = Join-Path $TitleDir "cache\\cpu"
@@ -644,13 +670,13 @@ function Get-RyujinxGameVersion {
     return [string]($versions | Select-Object -Last 1)
 }
 
-function Export-RyujinxInstalledTitles {
+function Export-InstalledTitlesFromGamesCache {
     param(
-        [Parameter(Mandatory = $true)][string]$RyujinxRootPath,
+        [Parameter(Mandatory = $true)][string]$EmulatorRootPath,
         [Parameter(Mandatory = $true)][string]$DestinationPath
     )
 
-    $gamesDir = Join-Path $RyujinxRootPath "games"
+    $gamesDir = Join-Path $EmulatorRootPath "games"
     $titles = @()
     if (Test-Path $gamesDir) {
         foreach ($child in Get-ChildItem $gamesDir -Directory | Sort-Object Name) {
@@ -660,7 +686,7 @@ function Export-RyujinxInstalledTitles {
 
             $titles += [ordered]@{
                 titleId = $child.Name.ToUpperInvariant()
-                displayVersion = (Get-RyujinxGameVersion -TitleDir $child.FullName)
+                displayVersion = (Get-EmulatorGameVersion -TitleDir $child.FullName)
             }
         }
     }
@@ -678,7 +704,9 @@ function Export-RyujinxInstalledTitles {
     [System.IO.File]::WriteAllText($DestinationPath, $json, $utf8NoBom)
 }
 
-$switchDir = Join-Path $RyujinxRoot "sdcard\\switch\\mil_manager"
+$resolvedRoot = if ($EmulatorRoot) { $EmulatorRoot } else { Resolve-DefaultEmulatorRoot }
+$sdRoot = Get-EmulatorSdRoot -EmulatorRootPath $resolvedRoot
+$switchDir = Join-Path $sdRoot "switch\\mil_manager"
 $cacheDir = Join-Path $switchDir "cache"
 $thumbnailCacheDir = Join-Path $cacheDir "images"
 $indexPath = Join-Path $cacheDir "index.json"
@@ -747,12 +775,26 @@ if ($python -and (Test-Path $thumbnailHelper)) {
 
 $syncUtility = Join-Path $PSScriptRoot "mil_emulator_sync.py"
 if ($python -and (Test-Path $syncUtility)) {
-    & $python.Source $syncUtility --emulator ryujinx --root $RyujinxRoot --output $normalizedInstalledPath
+    & $python.Source $syncUtility --emulator auto --root $resolvedRoot --output $normalizedInstalledPath
 } else {
-    Export-RyujinxInstalledTitles -RyujinxRootPath $RyujinxRoot -DestinationPath $normalizedInstalledPath
+    Export-InstalledTitlesFromGamesCache -EmulatorRootPath $resolvedRoot -DestinationPath $normalizedInstalledPath
 }
 
 Write-Host "Catalogo sincronizado em: $indexPath"
 Write-Host "Cheats sincronizados em: $cheatsIndexPath"
 Write-Host "Thumbs sincronizados em: $thumbnailCacheDir"
 Write-Host "Cache normalizado em: $normalizedInstalledPath"
+function Resolve-DefaultEmulatorRoot {
+    $candidates = @(
+        (Join-Path $env:APPDATA "Ryujinx"),
+        (Join-Path $env:APPDATA "eden")
+    )
+
+    foreach ($candidate in $candidates) {
+        if ($candidate -and (Test-Path $candidate)) {
+            return (Resolve-Path $candidate).Path
+        }
+    }
+
+    throw "Nao foi possivel localizar a raiz padrao do emulador. Informe -EmulatorRoot explicitamente."
+}

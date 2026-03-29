@@ -155,7 +155,7 @@ class EmulatorAdapter:
         raise NotImplementedError
 
 
-class RyujinxAdapter(EmulatorAdapter):
+class LibraryCacheAdapter(EmulatorAdapter):
     name = "ryujinx"
     implemented = True
 
@@ -271,7 +271,7 @@ class RyujinxAdapter(EmulatorAdapter):
     def scan(self, root: Optional[Path] = None) -> CachePayload:
         resolved_root = root or self.detect_default_root()
         if resolved_root is None:
-            raise FileNotFoundError("Ryujinx root not found. Use --root explicitly.")
+            raise FileNotFoundError("Emulator root not found. Use --root explicitly.")
 
         config = self._load_config(resolved_root)
         game_dirs = [str(path) for path in config.get("game_dirs", []) if isinstance(path, str)]
@@ -327,7 +327,7 @@ class RyujinxAdapter(EmulatorAdapter):
         )
 
 
-class EdenAdapter(EmulatorAdapter):
+class LegacyLayoutAdapter(EmulatorAdapter):
     name = "eden"
     implemented = False
 
@@ -342,10 +342,20 @@ class YuzuLikeAdapter(EmulatorAdapter):
 
 
 ADAPTERS: Dict[str, EmulatorAdapter] = {
-    "ryujinx": RyujinxAdapter(),
-    "eden": EdenAdapter(),
+    "ryujinx": LibraryCacheAdapter(),
+    "eden": LegacyLayoutAdapter(),
     "yuzu-like": YuzuLikeAdapter(),
 }
+
+
+def detect_emulator_name_from_root(root: Path) -> Optional[str]:
+    if (root / "Config.json").exists() or (root / "games").exists():
+        return "ryujinx"
+    if (root / "config" / "qt-config.ini").exists() or (root / "cache" / "game_list").exists():
+        return "eden"
+    if (root / "sdmc").exists() and (root / "nand").exists():
+        return "eden"
+    return None
 
 
 def sd_root_for_emulator(emulator: str, root: Path) -> Path:
@@ -411,16 +421,16 @@ def write_receipt(emulator: str, root: Path, operation: Dict[str, object]) -> No
     receipt_path.write_text("\n".join(lines) + "\n", encoding="utf-8")
 
 
-def account_uid_to_eden_legacy_dir(uid_text: str) -> str:
+def account_uid_to_legacy_save_dir(uid_text: str) -> str:
     uid_text = uid_text.strip().upper()
     if len(uid_text) != 32:
         return uid_text
     return uid_text[16:32] + uid_text[0:16]
 
 
-def resolve_eden_save_target(root: Path, operation: Dict[str, object]) -> Path:
+def resolve_legacy_save_target(root: Path, operation: Dict[str, object]) -> Path:
     title_id = str(operation.get("titleId") or "").upper()
-    user_id = account_uid_to_eden_legacy_dir(str(operation.get("saveUserId") or ""))
+    user_id = account_uid_to_legacy_save_dir(str(operation.get("saveUserId") or ""))
     base = root / "nand" / "user" / "save"
     if user_id:
         return base / "0000000000000000" / user_id / title_id
@@ -456,7 +466,7 @@ def process_save_ops(emulator: str, root: Path) -> int:
         backup_root = host_path_from_sd(emulator, root, str(operation.get("backupRoot") or ""))
 
         if emulator == "eden":
-            target_root = resolve_eden_save_target(root, operation)
+            target_root = resolve_legacy_save_target(root, operation)
         else:
             print(f"Skipping save op {op_path.name}: emulator '{emulator}' not supported for host-side save apply yet.", file=sys.stderr)
             continue
@@ -490,7 +500,7 @@ def write_text(path: Path, text: str) -> None:
 
 def parse_args(argv: Optional[Sequence[str]] = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Synchronize emulator titles into MIL cache format.")
-    parser.add_argument("--emulator", default="ryujinx", choices=sorted(ADAPTERS.keys()))
+    parser.add_argument("--emulator", default="auto", choices=["auto", *sorted(ADAPTERS.keys())])
     parser.add_argument("--root", default="", help="Emulator root directory.")
     parser.add_argument("--output", default="", help="Normalized cache output path.")
     parser.add_argument("--apply-save-ops-only", action="store_true", help="Apply pending emulator save operations and exit.")
@@ -507,17 +517,39 @@ def main(argv: Optional[Sequence[str]] = None) -> int:
             print(f"{name}: {status}")
         return 0
 
-    adapter = ADAPTERS[args.emulator]
-    if not adapter.implemented and not args.apply_save_ops_only:
-        print(f"Adapter '{args.emulator}' is planned but not implemented yet.", file=sys.stderr)
-        return 2
+    adapter_name = args.emulator
+    root = Path(args.root) if args.root else None
 
-    root = Path(args.root) if args.root else adapter.detect_default_root()
+    if adapter_name == "auto":
+        if root is not None:
+            detected_name = detect_emulator_name_from_root(root)
+            if detected_name is None:
+                print("Could not identify the emulator from the provided root.", file=sys.stderr)
+                return 2
+            adapter_name = detected_name
+        else:
+            for candidate_name, candidate in ADAPTERS.items():
+                detected_root = candidate.detect_default_root()
+                if detected_root is not None:
+                    adapter_name = candidate_name
+                    root = detected_root
+                    break
+            if adapter_name == "auto":
+                print("Could not locate a default emulator root.", file=sys.stderr)
+                return 2
+
+    adapter = ADAPTERS[adapter_name]
     if root is None:
-        print(f"Could not locate default root for emulator '{args.emulator}'.", file=sys.stderr)
+        root = adapter.detect_default_root()
+    if root is None:
+        print("Could not locate the emulator root.", file=sys.stderr)
         return 2
 
-    processed_ops = process_save_ops(args.emulator, root)
+    if not adapter.implemented and not args.apply_save_ops_only:
+        print("The selected emulator adapter is planned but not implemented yet.", file=sys.stderr)
+        return 2
+
+    processed_ops = process_save_ops(adapter_name, root)
     if processed_ops:
         print(f"Applied {processed_ops} pending save operation(s).")
 
