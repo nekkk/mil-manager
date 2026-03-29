@@ -343,6 +343,7 @@ struct TouchTarget {
 struct AppState {
     AppConfig config;
     CatalogIndex catalog;
+    std::unordered_map<std::string, std::string> catalogSearchIndex;
     CheatsIndex cheatsIndex;
     std::vector<CatalogEntry> derivedCheatEntries;
     std::unordered_map<std::string, std::string> derivedCheatSearchIndex;
@@ -350,6 +351,7 @@ struct AppState {
     std::vector<CatalogEntry> derivedSaveEntries;
     std::unordered_map<std::string, std::string> derivedSaveSearchIndex;
     std::vector<InstalledTitle> installedTitles;
+    std::unordered_map<std::string, std::size_t> installedTitleIndexById;
     std::vector<InstallReceipt> receipts;
     ContentSection section = ContentSection::Translations;
     std::size_t selection = 0;
@@ -802,6 +804,14 @@ InstalledTitle* FindInstalledTitleMutable(std::vector<InstalledTitle>& titles, c
     return nullptr;
 }
 
+const InstalledTitle* FindInstalledTitle(const AppState& state, const std::string& titleId) {
+    const auto it = state.installedTitleIndexById.find(ToLowerAscii(titleId));
+    if (it == state.installedTitleIndexById.end() || it->second >= state.installedTitles.size()) {
+        return nullptr;
+    }
+    return &state.installedTitles[it->second];
+}
+
 const CatalogEntry* FindCheatCatalogOverride(const CatalogIndex& catalog, const std::string& titleId) {
     const std::string normalized = ToLowerAscii(titleId);
     for (const CatalogEntry& entry : catalog.entries) {
@@ -884,6 +894,39 @@ std::string NormalizeSearchQuery(std::string value) {
     return ToLowerAscii(Trim(value));
 }
 
+std::string BuildCatalogSearchText(const CatalogEntry& entry) {
+    std::string text = ToLowerAscii(entry.name) + "\n" + ToLowerAscii(entry.titleId);
+    for (const std::string& tag : entry.tags) {
+        if (!tag.empty()) {
+            text += "\n";
+            text += ToLowerAscii(tag);
+        }
+    }
+    for (const std::string& contentType : entry.contentTypes) {
+        if (!contentType.empty()) {
+            text += "\n";
+            text += ToLowerAscii(contentType);
+        }
+    }
+    return text;
+}
+
+void RefreshCatalogSearchIndex(AppState& state) {
+    state.catalogSearchIndex.clear();
+    state.catalogSearchIndex.reserve(state.catalog.entries.size());
+    for (const CatalogEntry& entry : state.catalog.entries) {
+        state.catalogSearchIndex[entry.id] = BuildCatalogSearchText(entry);
+    }
+}
+
+void RefreshInstalledTitleIndex(AppState& state) {
+    state.installedTitleIndexById.clear();
+    state.installedTitleIndexById.reserve(state.installedTitles.size());
+    for (std::size_t index = 0; index < state.installedTitles.size(); ++index) {
+        state.installedTitleIndexById[ToLowerAscii(state.installedTitles[index].titleIdHex)] = index;
+    }
+}
+
 void InvalidateVisibleEntries(AppState& state) {
     state.visibleEntriesDirty = true;
     state.visibleEntriesCache.clear();
@@ -926,11 +969,11 @@ std::string BuildSaveSearchText(const CatalogEntry& entry, const SaveTitleRecord
 }
 
 const std::string* FindDerivedSearchText(const AppState& state, const CatalogEntry& entry) {
-    const auto* index = &state.derivedCheatSearchIndex;
-    if (entry.section == ContentSection::SaveGames) {
+    const auto* index = &state.catalogSearchIndex;
+    if (entry.section == ContentSection::Cheats) {
+        index = &state.derivedCheatSearchIndex;
+    } else if (entry.section == ContentSection::SaveGames) {
         index = &state.derivedSaveSearchIndex;
-    } else if (entry.section != ContentSection::Cheats) {
-        return nullptr;
     }
     const auto it = index->find(entry.id);
     if (it == index->end()) {
@@ -980,7 +1023,7 @@ bool CheatEntryHasExactBuildMatch(const AppState& state, const CatalogEntry& ent
 }
 
 bool EntryIsSuggested(const AppState& state, const CatalogEntry& entry) {
-    const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
+    const InstalledTitle* installedTitle = FindInstalledTitle(state, entry.titleId);
     if (entry.section == ContentSection::Cheats) {
         return CheatEntryHasExactBuildMatch(state, entry, installedTitle);
     }
@@ -991,14 +1034,14 @@ bool ShouldShowCheatEntryByDefault(const AppState& state, const CatalogEntry& en
     if (entry.section != ContentSection::Cheats) {
         return true;
     }
-    return FindInstalledTitle(state.installedTitles, entry.titleId) != nullptr;
+    return FindInstalledTitle(state, entry.titleId) != nullptr;
 }
 
 bool ShouldShowSaveEntryByDefault(const AppState& state, const CatalogEntry& entry) {
     if (entry.section != ContentSection::SaveGames) {
         return true;
     }
-    return FindInstalledTitle(state.installedTitles, entry.titleId) != nullptr;
+    return FindInstalledTitle(state, entry.titleId) != nullptr;
 }
 
 bool OpenSearchDialog(AppState& state) {
@@ -1260,7 +1303,7 @@ void FilterCheatsIndexToDetectedTitles(AppState& state) {
     std::vector<CheatTitleRecord> filteredTitles;
     filteredTitles.reserve(state.cheatsIndex.titles.size());
     for (const CheatTitleRecord& title : state.cheatsIndex.titles) {
-        if (FindInstalledTitle(state.installedTitles, title.titleId) != nullptr) {
+        if (FindInstalledTitle(state, title.titleId) != nullptr) {
             filteredTitles.push_back(title);
         }
     }
@@ -1345,7 +1388,7 @@ const std::vector<const CatalogEntry*>& BuildVisibleEntries(AppState& state) {
             }
         }
 
-        const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
+        const InstalledTitle* installedTitle = FindInstalledTitle(state, entry.titleId);
         PreparedEntry item;
         item.entry = &entry;
         item.sortName = ToLowerAscii(entry.name);
@@ -1611,7 +1654,7 @@ std::string CachedThumbnailPathForEntry(const AppState& state, const CatalogEntr
 }
 
 std::string PreferredThumbnailPathForEntry(const AppState& state, const CatalogEntry& entry) {
-    const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
+    const InstalledTitle* installedTitle = FindInstalledTitle(state, entry.titleId);
     if (installedTitle != nullptr && !installedTitle->localIconPath.empty() && FileExists(installedTitle->localIconPath)) {
         return installedTitle->localIconPath;
     }
@@ -1778,7 +1821,7 @@ void PrefetchVisibleThumbnail(AppState& state, const std::vector<const CatalogEn
 
     for (const CatalogEntry* candidate : candidates) {
         const CatalogEntry& entry = *candidate;
-        const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
+        const InstalledTitle* installedTitle = FindInstalledTitle(state, entry.titleId);
         if (installedTitle != nullptr && !installedTitle->localIconPath.empty() && FileExists(installedTitle->localIconPath)) {
             continue;
         }
@@ -2534,6 +2577,7 @@ bool LoadCatalog(AppState& state,
             return false;
         }
         state.catalog = std::move(localCatalog);
+        RefreshCatalogSearchIndex(state);
         std::string thumbError;
         EnsureThumbPackCache(state.catalog, state.activeCatalogSource, thumbError, false);
         ClearThumbnailFailures(state);
@@ -2592,6 +2636,7 @@ bool LoadCatalog(AppState& state,
         }
 
         state.catalog = std::move(remoteCatalog);
+        RefreshCatalogSearchIndex(state);
         std::string thumbError;
         UiDownloadProgressContext thumbProgress{
             &state,
@@ -5879,6 +5924,7 @@ void RefreshInstalledTitles(AppState& state) {
         GetLoaderInfoSummary() == "(empty)" &&
         !FileHasContent(kInstalledTitlesCachePath)) {
         state.installedTitles.clear();
+        RefreshInstalledTitleIndex(state);
         state.platformNote = "Loader info vazio. Leitura local por NS foi bloqueada em modo seguro.";
         InvalidateVisibleEntries(state);
         return;
@@ -5886,6 +5932,7 @@ void RefreshInstalledTitles(AppState& state) {
 
     std::string titlesNote;
     state.installedTitles = LoadInstalledTitles(state.config, &state.catalog, titlesNote);
+    RefreshInstalledTitleIndex(state);
     if (!titlesNote.empty()) {
         state.platformNote = titlesNote;
     }
