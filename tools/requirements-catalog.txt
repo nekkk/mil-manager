@@ -1,1 +1,2 @@
 Pillow>=10.0.0
+cryptography>=44.0.0
