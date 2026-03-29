@@ -57,7 +57,6 @@ Schemas e notas especificas:
 ## Repositorios
 
 - `mil-manager`: codigo-fonte publico do app, releases e documentacao
-- `mil-manager-catalog`: repositorio de gerenciamento do catalogo e do painel admin
 - `mil-manager-delivery`: artefatos sanitizados publicados para consumo do app
 
 ## Estrutura Local Importante
@@ -72,11 +71,6 @@ Configuracao:
 
 - `sdmc:/config/mil_manager/settings.ini`
 
-Compatibilidade legada:
-
-- o app ainda tolera leitura de caminhos antigos em `sdmc:/config/mil-manager/`
-- novas gravacoes usam `mil_manager`
-
 ## Emuladores
 
 O homebrew nao enxerga sozinho a biblioteca do host. O fluxo suportado e sincronizar o catalogo e a biblioteca antes de abrir o app:
@@ -90,23 +84,3 @@ powershell -ExecutionPolicy Bypass -File tools\start-emulator-with-sync.ps1
 Detalhes e cuidados operacionais:
 
 - [tools-and-operations.md](C:/Users/lordd/source/codex/mil-manager/docs/tools-and-operations.md)
-
-## Seguranca Operacional
-
-- o repositorio publico do app nao deve conter tokens, PATs ou URLs privadas
-- o delivery publico publica apenas artefatos sanitizados
-- as tools locais de sincronizacao trabalham com caminhos do usuario, nao com segredos embutidos
-- o painel admin usa token informado pelo operador e esse token nao deve ser commitado em arquivo algum
-
-## Lancamento Oficial
-
-O marco de lancamento oficial desta linha e:
-
-- `v1.0`
-
-Arquivos disponibilizados junto do commit:
-
-- [mil_manager.nro](C:/Users/lordd/source/codex/mil-manager/releases/v1.0/mil_manager.nro)
-- [mil_manager_forwarder.nsp](C:/Users/lordd/source/codex/mil-manager/releases/v1.0/mil_manager_forwarder.nsp)
-- [checksums.txt](C:/Users/lordd/source/codex/mil-manager/releases/v1.0/checksums.txt)
-- [RELEASE-NOTES.md](C:/Users/lordd/source/codex/mil-manager/releases/v1.0/RELEASE-NOTES.md)
