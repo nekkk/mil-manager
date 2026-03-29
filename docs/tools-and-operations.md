@@ -4,48 +4,9 @@
 
 As tools locais do `mil-manager` existem para:
 
-- gerar catalogos
-- preparar o delivery publico
 - sincronizar bibliotecas de emuladores
-- publicar diferencas com menos trabalho manual
-
-## Geracao de catalogo
-
-```powershell
-python tools\generate-index.py
-python tools\generate-cheats-index.py
-python tools\generate-saves-index.py
-python tools\prepare-pages-site.py
-```
-
-Saidas principais:
-
-- `dist/index.json`
-- `dist/cheats-index.json`
-- `dist/cheats-summary.json`
-- `dist/saves-index.json`
-- `dist/saves-summary.json`
-- `site/`
-
-## Publicacao para delivery
-
-Script:
-
-- [sync-mil-manager-delivery.ps1](C:/Users/lordd/source/codex/mil-manager/tools/sync-mil-manager-delivery.ps1)
-
-Uso:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-delivery.ps1
-powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-delivery.ps1 -Commit
-powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-delivery.ps1 -Commit -Push
-```
-
-Quando o lote estiver grande:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-delivery.ps1 -Commit -Push -BatchLargePush
-```
+- exportar estado instalado para cache local
+- auxiliar a execucao e validacao do app
 
 ## Sincronizacao de emuladores
 
@@ -67,6 +28,17 @@ Launcher com sincronizacao:
 powershell -ExecutionPolicy Bypass -File tools\start-emulator-with-sync.ps1
 ```
 
+## O que as tools nao devem expor
+
+- tokens GitHub em arquivo commitado
+- PATs em scripts
+- detalhes operacionais internos de catalogo e delivery
+
+## Sobre credenciais
+
+- o `mil-manager` publico nao deve armazenar segredos
+- fluxos de catalogo e delivery ficam fora deste repositorio
+
 ## Nomes e objetivos atuais
 
 - `sync-emulator.ps1`
@@ -75,3 +47,9 @@ powershell -ExecutionPolicy Bypass -File tools\start-emulator-with-sync.ps1
   - sincroniza e depois abre o executavel do emulador
 - `mil_emulator_sync.py`
   - gera `installed-titles-cache.json` e aplica operacoes de save pendentes
+- `export-emulator-installed.py`
+  - wrapper util para exportacao do estado instalado do emulador
+
+## Observacao sobre emuladores
+
+Internamente ainda existem adaptadores diferentes por layout suportado, mas a interface de operacao cotidiana foi simplificada para o termo generico `emulador`.

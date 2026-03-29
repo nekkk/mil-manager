@@ -7,7 +7,7 @@ Aplicativo homebrew para Nintendo Switch focado em listar, baixar e instalar:
 - trapacas
 - jogos salvos
 
-O app consome catalogos sanitizados publicados em `mil-manager-delivery` e usa `mil-manager-catalog` apenas como origem de gerenciamento e geracao.
+O app consome catalogos sanitizados publicados em `mil-manager-delivery`. Este repositório público fica focado no código do aplicativo, documentação e releases.
 
 ## Inicio Rapido
 
@@ -43,15 +43,9 @@ Visao geral:
 Operacao:
 
 - [tools-and-operations.md](C:/Users/lordd/source/codex/mil-manager/docs/tools-and-operations.md)
-- [manual-curation.md](C:/Users/lordd/source/codex/mil-manager/docs/manual-curation.md)
-- [implementation-plan.md](C:/Users/lordd/source/codex/mil-manager/docs/implementation-plan.md)
-- [delivery-architecture-v1.md](C:/Users/lordd/source/codex/mil-manager/docs/delivery-architecture-v1.md)
-- [repo-split-rollout.md](C:/Users/lordd/source/codex/mil-manager/docs/repo-split-rollout.md)
 
 Schemas e notas especificas:
 
-- [cheats-index-v1.md](C:/Users/lordd/source/codex/mil-manager/docs/cheats-index-v1.md)
-- [savegames-aggregation-v1.md](C:/Users/lordd/source/codex/mil-manager/docs/savegames-aggregation-v1.md)
 - [emulator-manifest-v2.md](C:/Users/lordd/source/codex/mil-manager/docs/emulator-manifest-v2.md)
 
 ## Repositorios
@@ -84,3 +78,21 @@ powershell -ExecutionPolicy Bypass -File tools\start-emulator-with-sync.ps1
 Detalhes e cuidados operacionais:
 
 - [tools-and-operations.md](C:/Users/lordd/source/codex/mil-manager/docs/tools-and-operations.md)
+
+## Seguranca Operacional
+
+- o repositorio publico do app nao deve conter tokens, PATs ou URLs privadas
+- as tools locais de sincronizacao trabalham com caminhos do usuario, nao com segredos embutidos
+
+## Lancamento Oficial
+
+O marco de lancamento oficial desta linha e:
+
+- `v1.0`
+
+Arquivos disponibilizados junto do commit:
+
+- [mil_manager.nro](C:/Users/lordd/source/codex/mil-manager/releases/v1.0/mil_manager.nro)
+- [mil_manager_forwarder.nsp](C:/Users/lordd/source/codex/mil-manager/releases/v1.0/mil_manager_forwarder.nsp)
+- [checksums.txt](C:/Users/lordd/source/codex/mil-manager/releases/v1.0/checksums.txt)
+- [RELEASE-NOTES.md](C:/Users/lordd/source/codex/mil-manager/releases/v1.0/RELEASE-NOTES.md)
