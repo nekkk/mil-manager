@@ -37,6 +37,7 @@ Visão geral:
 - [features.md](C:/Users/lordd/source/codex/mil-manager/docs/features.md)
 - [build-and-release.md](C:/Users/lordd/source/codex/mil-manager/docs/build-and-release.md)
 - [app-structure.md](C:/Users/lordd/source/codex/mil-manager/docs/app-structure.md)
+- [code-maintenance-guide.md](C:/Users/lordd/source/codex/mil-manager/docs/code-maintenance-guide.md)
 - [technical-stack.md](C:/Users/lordd/source/codex/mil-manager/docs/technical-stack.md)
 - [credits-and-references.md](C:/Users/lordd/source/codex/mil-manager/docs/credits-and-references.md)
 
