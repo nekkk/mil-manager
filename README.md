@@ -22,6 +22,10 @@ Artefato principal:
 
 - [mil_manager.nro](C:/Users/lordd/source/codex/mil-manager/build-switch2/mil_manager.nro)
 
+Release oficial atual:
+
+- [releases/v1.0](C:/Users/lordd/source/codex/mil-manager/releases/v1.0)
+
 Catalogo default atual:
 
 - [https://nekkk.github.io/mil-manager-delivery/index.json](https://nekkk.github.io/mil-manager-delivery/index.json)
@@ -92,3 +96,16 @@ Detalhes e cuidados operacionais:
 - o delivery publico publica apenas artefatos sanitizados
 - as tools locais de sincronizacao trabalham com caminhos do usuario, nao com segredos embutidos
 - o painel admin usa token informado pelo operador e esse token nao deve ser commitado em arquivo algum
+
+## Lancamento Oficial
+
+O marco de lancamento oficial desta linha e:
+
+- `v1.0`
+
+Arquivos disponibilizados junto do commit:
+
+- [mil_manager.nro](C:/Users/lordd/source/codex/mil-manager/releases/v1.0/mil_manager.nro)
+- [mil_manager_forwarder.nsp](C:/Users/lordd/source/codex/mil-manager/releases/v1.0/mil_manager_forwarder.nsp)
+- [checksums.txt](C:/Users/lordd/source/codex/mil-manager/releases/v1.0/checksums.txt)
+- [RELEASE-NOTES.md](C:/Users/lordd/source/codex/mil-manager/releases/v1.0/RELEASE-NOTES.md)
