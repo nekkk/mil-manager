@@ -501,6 +501,7 @@ bool EnsureSavesIndexReady(AppState& state, bool forceRemoteRefresh = false, boo
 void RefreshDerivedSaveEntries(AppState& state);
 bool EntryUsesSavesIndex(const AppState& state, const CatalogEntry& entry);
 std::string UiText(const AppState& state, const char* ptBr, const char* enUs);
+std::string UiString(const AppState& state, const char* key, const char* ptBr, const char* enUs);
 bool UseEnglish(const AppState& state);
 const CheatTitleRecord* FindCheatTitleRecord(const CheatsIndex& index, const std::string& titleId);
 const CheatBuildRecord* FindCheatBuildRecord(const CheatTitleRecord& title, const std::string& buildId);
@@ -4337,9 +4338,10 @@ std::string MakeCompatibilitySummaryLocalized(const AppState& state, const Catal
                title->displayVersion;
     }
 
-    std::string message = UiText(state,
-                                 u8"Aten??o: pacote fora da faixa suportada para o jogo instalado (",
-                                 "Warning: package is outside the supported range for the installed game (") +
+    std::string message = UiString(state,
+                                   "warning_package_is_outside_the_supported_range_for_the_installed_game",
+                                   u8"Aten??o: pacote fora da faixa suportada para o jogo instalado (",
+                                   "Warning: package is outside the supported range for the installed game (") +
                           title->displayVersion + ").";
     if (!variantSummary.empty()) {
         message += UiText(state, u8" Variantes dispon?veis: ", " Available variants: ") + variantSummary + ".";
@@ -6154,9 +6156,15 @@ void ActivateTouchTarget(AppState& state, const TouchTarget& target) {
             const bool allowNetworkRefresh = !IsRyujinxGuestEnvironment();
             SetProgress(state,
                         UiText(state, u8"Atualizando", "Refreshing"),
-                        UiText(state,
-                               allowNetworkRefresh ? u8"Verificando catálogo e cache..." : u8"Usando cache local do catálogo...",
-                               allowNetworkRefresh ? "Checking catalog and cache..." : "Using local catalog cache..."),
+                        allowNetworkRefresh
+                            ? UiString(state,
+                                       "ui.progress.checking_catalog_and_cache",
+                                       u8"Verificando catálogo e cache...",
+                                       "Checking catalog and cache...")
+                            : UiString(state,
+                                       "ui.progress.using_local_catalog_cache",
+                                       u8"Usando cache local do catálogo...",
+                                       "Using local catalog cache..."),
                         35);
             if (LoadCatalog(state, false, allowNetworkRefresh, allowNetworkRefresh, allowNetworkRefresh)) {
                 SetProgress(state,
@@ -6485,9 +6493,15 @@ int RunApplication() {
             const bool allowNetworkRefresh = !IsRyujinxGuestEnvironment();
             SetProgress(state,
                         UiText(state, u8"Atualizando", "Refreshing"),
-                        UiText(state,
-                               allowNetworkRefresh ? u8"Verificando catálogo e cache..." : u8"Usando cache local do catálogo...",
-                               allowNetworkRefresh ? "Checking catalog and cache..." : "Using local catalog cache..."),
+                        allowNetworkRefresh
+                            ? UiString(state,
+                                       "ui.progress.checking_catalog_and_cache",
+                                       u8"Verificando catálogo e cache...",
+                                       "Checking catalog and cache...")
+                            : UiString(state,
+                                       "ui.progress.using_local_catalog_cache",
+                                       u8"Usando cache local do catálogo...",
+                                       "Using local catalog cache..."),
                         35);
             if (LoadCatalog(state, false, allowNetworkRefresh, allowNetworkRefresh, allowNetworkRefresh)) {
                 SetProgress(state,

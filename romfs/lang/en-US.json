@@ -509,9 +509,12 @@
     },
     "missing_key": "[[missing key]]",
     "progress": {
+      "checking_catalog_and_cache": "Checking catalog and cache...",
+      "downloading_thumb_pack": "Downloading thumb pack...",
       "installing_save": "Applying save",
       "restoring_save": "Restoring save",
-      "save_backup_restore": "Backup saved and variant applied."
+      "save_backup_restore": "Backup saved and variant applied.",
+      "using_local_catalog_cache": "Using local catalog cache..."
     },
     "save": {
       "intro": "Automatic backup of the current save and direct application of the selected variant.",
