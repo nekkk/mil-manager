@@ -530,6 +530,9 @@
       "saves": "Jogos Salvos",
       "translations": "Tradu\u00e7\u00f5es & Dublagens"
     },
+    "warning": {
+      "package_outside_supported_range_for_installed_game": "Aten\u00e7\u00e3o: pacote fora da faixa suportada para o jogo instalado ("
+    },
     "sort": {
       "name": "Nome",
       "recent": "Recentes",

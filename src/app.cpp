@@ -4339,7 +4339,7 @@ std::string MakeCompatibilitySummaryLocalized(const AppState& state, const Catal
     }
 
     std::string message = UiString(state,
-                                   "warning_package_is_outside_the_supported_range_for_the_installed_game",
+                                   "ui.warning.package_outside_supported_range_for_installed_game",
                                    u8"Aten??o: pacote fora da faixa suportada para o jogo instalado (",
                                    "Warning: package is outside the supported range for the installed game (") +
                           title->displayVersion + ").";

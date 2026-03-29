@@ -530,6 +530,9 @@
       "saves": "Save Games",
       "translations": "Translations & Dubs"
     },
+    "warning": {
+      "package_outside_supported_range_for_installed_game": "Warning: package is outside the supported range for the installed game ("
+    },
     "sort": {
       "name": "Name",
       "recent": "Recent",
