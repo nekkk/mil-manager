@@ -5,7 +5,7 @@
 - devkitPro
 - libnx / toolchain Switch do devkitPro
 - CMake 3.20+
-- Python 3 para as tools do catalogo
+- Python 3 para as tools locais de emulador
 
 ## Build local
 
@@ -26,7 +26,6 @@ O `romfs/` embute:
 
 - fontes
 - icones
-- imagens
 - idiomas em `romfs/lang/*.json`
 
 Sempre que o NRO for recompilado, o ROMFS atualizado entra junto no artefato.
@@ -38,8 +37,8 @@ Sempre que o NRO for recompilado, o ROMFS atualizado entra junto no artefato.
 3. salvar commit da etapa
 4. marcar tag quando fizer sentido
 5. compilar build final
-6. anexar NRO na release do repositório publico
-7. atualizar o delivery sanitizado quando a mudanca tocar catalogo
+6. anexar NRO e, se aplicavel, NSP forwarder na GitHub Release do repositório publico
+7. se a mudanca tocar o catalogo, operar isso no repositório `mil-manager-catalog`
 
 ## Publicacao do app
 
@@ -54,25 +53,17 @@ git push origin main
 git push origin --tags
 ```
 
-## Publicacao do delivery
+## Publicacao do catalogo e delivery
 
-Geracao:
+O `mil-manager` nao gera mais o catalogo nem publica o delivery diretamente.
 
-```powershell
-python tools\generate-index.py
-python tools\generate-cheats-index.py
-python tools\generate-saves-index.py
-python tools\prepare-pages-site.py
-```
+Essas operacoes agora pertencem ao repositório:
 
-Sincronizacao:
+- `mil-manager-catalog`
 
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-delivery.ps1 -Commit -Push
-```
+Consulte a documentacao operacional desse repositório para:
 
-Quando o lote for grande:
-
-```powershell
-powershell -ExecutionPolicy Bypass -File tools\sync-mil-manager-delivery.ps1 -Commit -Push -BatchLargePush
-```
+- geracao dos indices
+- publicacao do `mil-manager-delivery`
+- operacao do painel admin
+- automacao via GitHub Actions

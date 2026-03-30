@@ -24,7 +24,8 @@ Artefato principal:
 
 Release oficial atual:
 
-- [releases/v1.0](C:/Users/lordd/source/codex/mil-manager/releases/v1.0)
+- tag `v1.0`
+- assets publicados na GitHub Release do repositório `mil-manager`
 
 Catálogo default atual:
 
@@ -52,6 +53,7 @@ Schemas e notas específicas:
 ## Repositórios
 
 - `mil-manager`: codigo-fonte publico do app, releases e documentacao
+- `mil-manager-catalog`: catalogo privado, painel admin e geracao dos indices
 - `mil-manager-delivery`: artefatos sanitizados publicados para consumo do app
 
 ## Estrutura Local Importante
