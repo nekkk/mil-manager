@@ -3032,6 +3032,9 @@ CatalogEntry ResolveEntryForVariant(const CatalogEntry& entry, const CatalogVari
     if (variant == nullptr) {
         return resolved;
     }
+    if (!variant->installTarget.empty()) {
+        resolved.installTarget = variant->installTarget;
+    }
     if (!variant->assetId.empty()) {
         resolved.assetId = variant->assetId;
     }

@@ -1641,6 +1641,13 @@ bool RemoveEmptyParents(const std::string& path) {
 }
 
 bool ShouldInstallUnderAtmosphereContents(const CatalogEntry& entry) {
+    const std::string installTarget = ToLowerAscii(Trim(entry.installTarget));
+    if (installTarget == "sd-root" || installTarget == "sdmc-root" || installTarget == "root") {
+        return false;
+    }
+    if (installTarget == "atmosphere-contents" || installTarget == "contents" || installTarget == "atmosphere") {
+        return true;
+    }
     return entry.section != ContentSection::SaveGames;
 }
 

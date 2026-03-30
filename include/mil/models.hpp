@@ -43,6 +43,7 @@ struct CompatibilityRule {
 struct CatalogVariant {
     std::string id;
     std::string label;
+    std::string installTarget;
     std::string assetId;
     std::string assetType;
     std::string contentHash;
@@ -58,6 +59,7 @@ struct CatalogEntry {
     std::string id;
     std::string titleId;
     std::string name;
+    std::string installTarget;
     std::string intro;
     std::string introPtBr;
     std::string introEnUs;

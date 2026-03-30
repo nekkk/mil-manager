@@ -76,6 +76,7 @@ CompatibilityRule ParseCompatibilityRule(const picojson::object& object) {
 bool ParseVariant(const picojson::object& object, CatalogVariant& variant) {
     variant.id = GetString(object, "id");
     variant.label = GetString(object, "label");
+    variant.installTarget = GetString(object, "installTarget");
     variant.assetId = GetString(object, "assetId");
     variant.assetType = GetString(object, "assetType");
     variant.contentHash = GetString(object, "contentHash");
@@ -100,6 +101,7 @@ bool ParseEntry(const picojson::object& object, CatalogEntry& entry) {
     entry.id = GetString(object, "id");
     entry.titleId = ToLowerAscii(GetString(object, "titleId"));
     entry.name = GetString(object, "name");
+    entry.installTarget = GetString(object, "installTarget");
     entry.introPtBr = GetString(object, "introPtBr");
     if (entry.introPtBr.empty()) {
         entry.introPtBr = GetString(object, "intro");
