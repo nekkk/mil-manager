@@ -867,6 +867,28 @@ bool PerformGetRequest(const std::string& url, HttpResponse& response, std::stri
 
 }  // namespace
 
+bool Base64UrlDecode(std::string encodedValue, std::string& decodedOut) {
+    std::replace(encodedValue.begin(), encodedValue.end(), '-', '+');
+    std::replace(encodedValue.begin(), encodedValue.end(), '_', '/');
+    while (encodedValue.size() % 4 != 0) {
+        encodedValue.push_back('=');
+    }
+
+    decodedOut.assign((encodedValue.size() * 3) / 4 + 1, '\0');
+    std::size_t outputSize = 0;
+    const int base64Result = mbedtls_base64_decode(reinterpret_cast<unsigned char*>(decodedOut.data()),
+                                                   decodedOut.size(),
+                                                   &outputSize,
+                                                   reinterpret_cast<const unsigned char*>(encodedValue.data()),
+                                                   encodedValue.size());
+    if (base64Result != 0) {
+        decodedOut.clear();
+        return false;
+    }
+    decodedOut.resize(outputSize);
+    return true;
+}
+
 bool HttpGetToString(const std::string& url, HttpResponse& response, std::string& error) {
     if (!IsMegaUrl(url)) {
         return PerformGetRequest(url, response, error);

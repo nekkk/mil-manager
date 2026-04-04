@@ -2095,12 +2095,36 @@ std::string JoinBaseUrlAndRelativePath(const std::string& baseUrl, const std::st
     return baseUrl + "/" + relativePath;
 }
 
+std::string DecodeObfuscatedDownloadUrl(const std::string& explicitUrl) {
+    static constexpr const char* kPrefix = "obf:v1:";
+    static constexpr const char* kMask = "mil-manager-package-url-mask-v1";
+    if (explicitUrl.rfind(kPrefix, 0) != 0) {
+        return explicitUrl;
+    }
+
+    std::string decoded;
+    if (!Base64UrlDecode(explicitUrl.substr(std::char_traits<char>::length(kPrefix)), decoded) || decoded.empty()) {
+        return {};
+    }
+
+    const std::size_t maskLength = std::char_traits<char>::length(kMask);
+    for (std::size_t index = 0; index < decoded.size(); ++index) {
+        decoded[index] = static_cast<char>(static_cast<unsigned char>(decoded[index]) ^
+                                           static_cast<unsigned char>(kMask[index % maskLength]));
+    }
+
+    if (decoded.rfind("http://", 0) == 0 || decoded.rfind("https://", 0) == 0) {
+        return decoded;
+    }
+    return {};
+}
+
 std::string ResolveDeliveryUrl(const std::string& relativePath,
                                const std::string& explicitUrl,
                                const std::string& deliveryBaseUrl,
                                const std::string& sourceDocument) {
     if (!explicitUrl.empty()) {
-        return explicitUrl;
+        return DecodeObfuscatedDownloadUrl(explicitUrl);
     }
     if (!relativePath.empty()) {
         if (const std::string fromDeliveryBase = JoinBaseUrlAndRelativePath(deliveryBaseUrl, relativePath);

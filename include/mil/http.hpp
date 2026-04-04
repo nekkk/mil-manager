@@ -46,5 +46,6 @@ bool HttpGetWithCache(const std::vector<std::string>& urls,
                       HttpResponse& response,
                       std::string& source,
                       std::string& error);
+bool Base64UrlDecode(std::string encodedValue, std::string& decodedOut);
 
 }  // namespace mil
