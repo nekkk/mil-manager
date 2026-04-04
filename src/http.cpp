@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cctype>
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstdio>
@@ -9,6 +10,7 @@
 #include <memory>
 #include <string>
 #include <sys/stat.h>
+#include <thread>
 
 #include <curl/curl.h>
 #include <mbedtls/aes.h>
@@ -27,6 +29,7 @@ constexpr long kRequestTimeoutMs = 8000;
 constexpr long kDownloadConnectTimeoutMs = 12000;
 constexpr long kDownloadTimeoutMs = 120000;
 constexpr int kDownloadRetryCount = 3;
+constexpr int kMegaApiRetryCount = 3;
 
 struct FileSink {
     FILE* file = nullptr;
@@ -489,18 +492,124 @@ bool DecryptMegaAttributes(const std::string& encodedAttributes, const std::stri
     return true;
 }
 
+std::string MegaApiErrorText(int code) {
+    switch (code) {
+        case -1:
+            return "Erro interno do MEGA.";
+        case -2:
+            return "Argumentos invalidos enviados ao MEGA.";
+        case -3:
+            return "MEGA indisponivel temporariamente.";
+        case -4:
+            return "Limite temporario do MEGA excedido.";
+        case -6:
+            return "Muitos acessos ao MEGA a partir desta rede.";
+        case -9:
+            return "Arquivo do MEGA nao encontrado.";
+        case -11:
+            return "Acesso negado pelo MEGA.";
+        default:
+            return "Erro retornado pelo MEGA.";
+    }
+}
+
+bool ParseMegaApiResponseArray(const std::string& body,
+                               picojson::array& responseArray,
+                               std::string& error,
+                               bool& retryable) {
+    retryable = false;
+
+    picojson::value root;
+    const std::string parseError = picojson::parse(root, body);
+    if (!parseError.empty()) {
+        error = "Resposta invalida do MEGA.";
+        return false;
+    }
+
+    auto handleError = [&](int code) {
+        retryable = (code == -3 || code == -4 || code == -6);
+        error = MegaApiErrorText(code) + " (codigo " + std::to_string(code) + ")";
+    };
+
+    if (root.is<double>()) {
+        handleError(static_cast<int>(root.get<double>()));
+        return false;
+    }
+    if (!root.is<picojson::array>() || root.get<picojson::array>().empty()) {
+        error = "Resposta invalida do MEGA.";
+        return false;
+    }
+
+    const picojson::array& array = root.get<picojson::array>();
+    const picojson::value& first = array.front();
+    if (first.is<double>()) {
+        handleError(static_cast<int>(first.get<double>()));
+        return false;
+    }
+
+    responseArray = array;
+    return true;
+}
+
+bool PerformMegaApiRequest(const std::string& apiUrl,
+                           const std::string& body,
+                           picojson::array& responseArray,
+                           std::string& error) {
+    for (int attempt = 0; attempt < kMegaApiRetryCount; ++attempt) {
+        HttpResponse response;
+        CURL* curl = curl_easy_init();
+        if (!curl) {
+            error = "curl_easy_init falhou.";
+            return false;
+        }
+
+        curl_easy_setopt(curl, CURLOPT_URL, apiUrl.c_str());
+        curl_easy_setopt(curl, CURLOPT_POST, 1L);
+        curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
+        curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
+        curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteStringCallback);
+        ConfigureCurlCommon(curl);
+
+        const CURLcode performResult = curl_easy_perform(curl);
+        curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.statusCode);
+        curl_easy_cleanup(curl);
+
+        if (performResult != CURLE_OK) {
+            error = std::string("Falha na consulta do MEGA: ") + curl_easy_strerror(performResult);
+            return false;
+        }
+        if (response.statusCode < 200 || response.statusCode >= 300) {
+            error = "Resposta HTTP invalida do MEGA: " + std::to_string(response.statusCode);
+            return false;
+        }
+
+        bool retryable = false;
+        if (ParseMegaApiResponseArray(response.body, responseArray, error, retryable)) {
+            return true;
+        }
+        if (!retryable || attempt + 1 >= kMegaApiRetryCount) {
+            return false;
+        }
+
+        std::this_thread::sleep_for(std::chrono::milliseconds(700 * (attempt + 1)));
+    }
+
+    error = "Falha temporaria ao consultar o MEGA.";
+    return false;
+}
+
 bool ResolveMegaFile(const std::string& publicUrl, MegaInfo& info, std::string& error) {
     const std::string fileId = ExtractMegaId(publicUrl);
     const std::string encodedKey = ExtractMegaNodeKey(publicUrl);
     if (fileId.empty() || encodedKey.empty()) {
-        error = "Link do MEGA invÃ¡lido.";
+        error = "Link do MEGA inv????lido.";
         return false;
     }
 
     std::string key;
     std::string iv;
     if (!DecodeMegaNodeKey(encodedKey, key, iv)) {
-        error = "NÃ£o foi possÃ­vel decodificar a chave do MEGA.";
+        error = "N????o foi poss????vel decodificar a chave do MEGA.";
         return false;
     }
 
@@ -511,42 +620,13 @@ bool ResolveMegaFile(const std::string& publicUrl, MegaInfo& info, std::string& 
     requestObject["p"] = picojson::value(fileId);
     requestArray.emplace_back(requestObject);
 
-    HttpResponse response;
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        error = "curl_easy_init falhou.";
-        return false;
-    }
-
     const std::string body = picojson::value(requestArray).serialize();
-    curl_easy_setopt(curl, CURLOPT_URL, "https://g.api.mega.co.nz/cs");
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, body.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &response.body);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteStringCallback);
-    ConfigureCurlCommon(curl);
-
-    const CURLcode performResult = curl_easy_perform(curl);
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &response.statusCode);
-    curl_easy_cleanup(curl);
-
-    if (performResult != CURLE_OK) {
-        error = std::string("Falha na consulta do MEGA: ") + curl_easy_strerror(performResult);
-        return false;
-    }
-    if (response.statusCode < 200 || response.statusCode >= 300) {
-        error = "Resposta HTTP invÃ¡lida do MEGA: " + std::to_string(response.statusCode);
+    picojson::array responseArray;
+    if (!PerformMegaApiRequest("https://g.api.mega.co.nz/cs", body, responseArray, error)) {
         return false;
     }
 
-    picojson::value root;
-    const std::string parseError = picojson::parse(root, response.body);
-    if (!parseError.empty() || !root.is<picojson::array>() || root.get<picojson::array>().empty()) {
-        error = "Resposta invÃ¡lida do MEGA.";
-        return false;
-    }
-
-    const picojson::value& first = root.get<picojson::array>().front();
+    const picojson::value& first = responseArray.front();
     if (!first.is<picojson::object>()) {
         error = "Resposta do MEGA sem objeto de download.";
         return false;
@@ -555,7 +635,7 @@ bool ResolveMegaFile(const std::string& publicUrl, MegaInfo& info, std::string& 
     const auto& object = first.get<picojson::object>();
     const auto directUrlIt = object.find("g");
     if (directUrlIt == object.end() || !directUrlIt->second.is<std::string>()) {
-        error = "MEGA nÃ£o retornou a URL de download.";
+        error = "MEGA n????o retornou a URL de download.";
         return false;
     }
 
@@ -570,52 +650,23 @@ bool ResolveMegaFolderFile(const std::string& publicUrl, MegaInfo& info, std::st
     const std::string folderId = ExtractMegaFolderId(publicUrl);
     const std::string encodedFolderKey = ExtractMegaNodeKey(publicUrl);
     if (folderId.empty() || encodedFolderKey.empty()) {
-        error = "Link de pasta do MEGA invÃ¡lido.";
+        error = "Link de pasta do MEGA inv????lido.";
         return false;
     }
 
     std::string folderKey;
     if (!DecodeMegaFolderKey(encodedFolderKey, folderKey)) {
-        error = "NÃ£o foi possÃ­vel decodificar a chave da pasta do MEGA.";
-        return false;
-    }
-
-    HttpResponse listResponse;
-    CURL* curl = curl_easy_init();
-    if (!curl) {
-        error = "curl_easy_init falhou.";
+        error = "N????o foi poss????vel decodificar a chave da pasta do MEGA.";
         return false;
     }
 
     const std::string listBody = R"([{"a":"f","c":1,"ca":1,"r":1}])";
-    curl_easy_setopt(curl, CURLOPT_URL, ("https://g.api.mega.co.nz/cs?id=0&n=" + folderId).c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, listBody.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &listResponse.body);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteStringCallback);
-    ConfigureCurlCommon(curl);
-
-    const CURLcode listResult = curl_easy_perform(curl);
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &listResponse.statusCode);
-    curl_easy_cleanup(curl);
-
-    if (listResult != CURLE_OK) {
-        error = std::string("Falha na consulta da pasta do MEGA: ") + curl_easy_strerror(listResult);
-        return false;
-    }
-    if (listResponse.statusCode < 200 || listResponse.statusCode >= 300) {
-        error = "Resposta HTTP invÃ¡lida da pasta do MEGA: " + std::to_string(listResponse.statusCode);
+    picojson::array listArray;
+    if (!PerformMegaApiRequest("https://g.api.mega.co.nz/cs?id=0&n=" + folderId, listBody, listArray, error)) {
         return false;
     }
 
-    picojson::value root;
-    const std::string parseError = picojson::parse(root, listResponse.body);
-    if (!parseError.empty() || !root.is<picojson::array>() || root.get<picojson::array>().empty()) {
-        error = "Resposta invÃ¡lida da pasta do MEGA.";
-        return false;
-    }
-
-    const picojson::value& first = root.get<picojson::array>().front();
+    const picojson::value& first = listArray.front();
     if (!first.is<picojson::object>()) {
         error = "Resposta da pasta do MEGA sem objeto raiz.";
         return false;
@@ -665,7 +716,7 @@ bool ResolveMegaFolderFile(const std::string& publicUrl, MegaInfo& info, std::st
     }
 
     if (rootHandle.empty()) {
-        error = "NÃ£o foi possÃ­vel identificar a pasta raiz do link do MEGA.";
+        error = "N????o foi poss????vel identificar a pasta raiz do link do MEGA.";
         return false;
     }
 
@@ -699,46 +750,17 @@ bool ResolveMegaFolderFile(const std::string& publicUrl, MegaInfo& info, std::st
     }
 
     if (!foundFallback) {
-        error = "Nenhum arquivo vÃ¡lido encontrado na pasta do MEGA.";
-        return false;
-    }
-
-    HttpResponse fileResponse;
-    curl = curl_easy_init();
-    if (!curl) {
-        error = "curl_easy_init falhou.";
+        error = "Nenhum arquivo v????lido encontrado na pasta do MEGA.";
         return false;
     }
 
     const std::string fileBody = "[{\"a\":\"g\",\"g\":1,\"n\":\"" + selectedEntry.handle + "\"}]";
-    curl_easy_setopt(curl, CURLOPT_URL, ("https://g.api.mega.co.nz/cs?id=0&n=" + folderId).c_str());
-    curl_easy_setopt(curl, CURLOPT_POST, 1L);
-    curl_easy_setopt(curl, CURLOPT_POSTFIELDS, fileBody.c_str());
-    curl_easy_setopt(curl, CURLOPT_WRITEDATA, &fileResponse.body);
-    curl_easy_setopt(curl, CURLOPT_WRITEFUNCTION, WriteStringCallback);
-    ConfigureCurlCommon(curl);
-
-    const CURLcode fileResult = curl_easy_perform(curl);
-    curl_easy_getinfo(curl, CURLINFO_RESPONSE_CODE, &fileResponse.statusCode);
-    curl_easy_cleanup(curl);
-
-    if (fileResult != CURLE_OK) {
-        error = std::string("Falha ao resolver arquivo da pasta do MEGA: ") + curl_easy_strerror(fileResult);
-        return false;
-    }
-    if (fileResponse.statusCode < 200 || fileResponse.statusCode >= 300) {
-        error = "Resposta HTTP invÃ¡lida ao resolver arquivo da pasta do MEGA: " + std::to_string(fileResponse.statusCode);
+    picojson::array fileArray;
+    if (!PerformMegaApiRequest("https://g.api.mega.co.nz/cs?id=0&n=" + folderId, fileBody, fileArray, error)) {
         return false;
     }
 
-    picojson::value fileRoot;
-    const std::string fileParseError = picojson::parse(fileRoot, fileResponse.body);
-    if (!fileParseError.empty() || !fileRoot.is<picojson::array>() || fileRoot.get<picojson::array>().empty()) {
-        error = "Resposta invÃ¡lida ao resolver arquivo da pasta do MEGA.";
-        return false;
-    }
-
-    const picojson::value& fileFirst = fileRoot.get<picojson::array>().front();
+    const picojson::value& fileFirst = fileArray.front();
     if (!fileFirst.is<picojson::object>()) {
         error = "Resposta do arquivo da pasta do MEGA sem objeto.";
         return false;
@@ -747,7 +769,7 @@ bool ResolveMegaFolderFile(const std::string& publicUrl, MegaInfo& info, std::st
     const auto& fileObject = fileFirst.get<picojson::object>();
     const auto directUrlIt = fileObject.find("g");
     if (directUrlIt == fileObject.end() || !directUrlIt->second.is<std::string>()) {
-        error = "Pasta do MEGA nÃ£o retornou URL de download para o Ã­ndice.";
+        error = "Pasta do MEGA n????o retornou URL de download para o ????ndice.";
         return false;
     }
 
