@@ -3668,11 +3668,20 @@ std::string CheatBuildSelectionMessage(const AppState& state, const InstalledTit
 bool InstallResolvedEntry(AppState& state, const CatalogEntry& entry, const CatalogVariant* variant) {
     const InstalledTitle* installedTitle = FindInstalledTitle(state.installedTitles, entry.titleId);
     CatalogEntry resolvedEntry = ResolveEntryForVariant(entry, variant);
-    if (variant != nullptr && resolvedEntry.downloadUrl.empty()) {
-        resolvedEntry.downloadUrl = ResolveCatalogVariantDownloadUrl(state, *variant);
+
+    const auto needsResolvedUrl = [](const std::string& url) {
+        return url.rfind("obf:v1:", 0) == 0;
+    };
+
+    if (variant != nullptr) {
+        if (const std::string variantUrl = ResolveCatalogVariantDownloadUrl(state, *variant); !variantUrl.empty()) {
+            resolvedEntry.downloadUrl = variantUrl;
+        }
     }
-    if (resolvedEntry.downloadUrl.empty()) {
-        resolvedEntry.downloadUrl = ResolveCatalogEntryDownloadUrl(state, resolvedEntry);
+    if (resolvedEntry.downloadUrl.empty() || needsResolvedUrl(resolvedEntry.downloadUrl)) {
+        if (const std::string entryUrl = ResolveCatalogEntryDownloadUrl(state, resolvedEntry); !entryUrl.empty()) {
+            resolvedEntry.downloadUrl = entryUrl;
+        }
     }
 
     if (entry.section == ContentSection::SaveGames) {
