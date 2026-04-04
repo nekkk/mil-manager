@@ -121,6 +121,12 @@ Se um item aparece quebrado na UI, confirme nesta ordem:
 
 ### Instalacao e remocao
 
+No modelo atual do catalogo:
+
+- `thumbs`, `cheats` e `saves` continuam vindo do `mil-manager-delivery`
+- `traducoes`, `mods` e `dublagens` podem vir com `downloadUrl` ofuscada no catalogo principal
+- essa URL e resolvida pelo app antes do download
+
 Arquivo principal:
 
 - [installer.cpp](C:/Users/lordd/source/codex/mil-manager/src/installer.cpp)
@@ -212,6 +218,11 @@ Voce encontra:
 2. [app.cpp](C:/Users/lordd/source/codex/mil-manager/src/app.cpp) atualiza cache e estado
 3. parsers reconstroem os modelos em memoria
 4. a lista visivel e invalidada e reconstruida
+
+Observacao:
+
+- no catalogo principal, `downloadUrl` pode chegar ofuscada e ser decodificada no app
+- em `cheats`, `saves` e thumbs o fluxo continua baseado em `deliveryBaseUrl + relativePath`
 
 ### Instalacao
 
