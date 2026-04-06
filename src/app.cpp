@@ -648,6 +648,8 @@ constexpr int kDetailsX = 878;
 constexpr int kDetailsY = 28;
 constexpr int kDetailsWidth = 378;
 constexpr int kDetailsHeight = 610;
+constexpr int kDetailsIntroMaxLines = 5;
+constexpr int kDetailsSummaryMaxLines = 10;
 constexpr int kDetailsActionX = kDetailsX + 20;
 constexpr int kDetailsActionY = kDetailsY + kDetailsHeight - 58;
 constexpr int kDetailsActionWidth = kDetailsWidth - 40;
@@ -5326,14 +5328,35 @@ void DrawDetails(gfx::Canvas& canvas,
 
     int cursorY = y + 114;
     if (!localizedIntro.empty()) {
-        const int introHeight = gfx::DrawTextWrapped(canvas, x + 20, cursorY, width - 40, localizedIntro, palette.primaryText, 1, 4);
-        gfx::DrawTextWrapped(canvas, x + 21, cursorY, width - 40, localizedIntro, palette.primaryText, 1, 4);
+        const int introHeight = gfx::DrawTextWrapped(canvas,
+                                                     x + 20,
+                                                     cursorY,
+                                                     width - 40,
+                                                     localizedIntro,
+                                                     palette.primaryText,
+                                                     1,
+                                                     kDetailsIntroMaxLines);
+        gfx::DrawTextWrapped(canvas,
+                             x + 21,
+                             cursorY,
+                             width - 40,
+                             localizedIntro,
+                             palette.primaryText,
+                             1,
+                             kDetailsIntroMaxLines);
         cursorY += introHeight;
         cursorY += gfx::LineHeight(1);
     }
 
     if (!localizedSummary.empty()) {
-        cursorY += gfx::DrawTextWrapped(canvas, x + 20, cursorY, width - 40, localizedSummary, palette.primaryText, 1, 6);
+        cursorY += gfx::DrawTextWrapped(canvas,
+                                        x + 20,
+                                        cursorY,
+                                        width - 40,
+                                        localizedSummary,
+                                        palette.primaryText,
+                                        1,
+                                        kDetailsSummaryMaxLines);
         cursorY += gfx::LineHeight(1) + 2;
     }
 
